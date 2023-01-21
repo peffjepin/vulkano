@@ -151,12 +151,36 @@ struct vulkano_graphics_pipeline_config {
 
 #define VULKANO_MAX_SHADER_STAGES 5
 
+struct vulkano_buffer {
+    VkBuffer handle;
+    VkDeviceMemory memory;
+    VkBufferUsageFlags usage;
+    VkMemoryPropertyFlags memory_flags;
+    uint32_t capacity;
+};
+
+struct vulkano_image {
+    VkImage handle;
+    VkDeviceMemory memory;
+    VkMemoryPropertyFlags memory_flags;
+    VkImageLayout layout;
+};
+
+struct vulkano_frame {
+    uint64_t number;
+    uint32_t image_index;
+    float clear[4];
+
+    VkSemaphore image_ready;
+    VkSemaphore rendering_complete;
+    VkFence frame_presented;
+    VkCommandBuffer command_buffer;
+    VkFramebuffer framebuffer;
+};
+
 struct vulkano_rendering_state {
     uint64_t frame_count;
-    VkCommandBuffer command_buffers[VULKANO_CONCURRENT_FRAMES];
-    VkSemaphore image_ready[VULKANO_CONCURRENT_FRAMES];
-    VkSemaphore rendering_complete[VULKANO_CONCURRENT_FRAMES];
-    VkFence frame_complete[VULKANO_CONCURRENT_FRAMES];
+    struct vulkano_frame frames[VULKANO_CONCURRENT_FRAMES];
 };
 
 struct vulkano_swapchain_state {
@@ -301,29 +325,6 @@ void vulkano_sdl_destroy(struct vulkano_sdl* vksdl);
 
 #define VULKANO_DATA_STACK_ARRAY(array)                                                  \
     (struct vulkano_data) { .length = sizeof(array), .bytes = array }
-
-struct vulkano_buffer {
-    VkBuffer handle;
-    VkDeviceMemory memory;
-    VkBufferUsageFlags usage;
-    VkMemoryPropertyFlags memory_flags;
-    uint32_t capacity;
-};
-
-struct vulkano_image {
-    VkImage handle;
-    VkDeviceMemory memory;
-    VkMemoryPropertyFlags memory_flags;
-    VkImageLayout layout;
-};
-
-struct vulkano_frame {
-    uint64_t number;
-    VkCommandBuffer command_buffer;
-    VkFramebuffer framebuffer;
-    uint32_t image_index;
-    float clear[4];
-};
 
 void vulkano_begin_frame(
     struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error
@@ -472,6 +473,18 @@ VkImageView vulkano_create_image_view(
 );
 VkSampler vulkano_create_sampler(
     struct vulkano* vk, struct VkSamplerCreateInfo info, struct vulkano_error* error
+);
+VkSemaphore vulkano_create_semaphore(
+    struct vulkano* vk, struct VkSemaphoreCreateInfo info, struct vulkano_error* error
+);
+VkFence vulkano_create_fence(
+    struct vulkano* vk, struct VkFenceCreateInfo info, struct vulkano_error* error
+);
+void vulkano_allocate_command_buffers(
+    struct vulkano* vk,
+    struct VkCommandBufferAllocateInfo info,
+    VkCommandBuffer* command_buffers,
+    struct vulkano_error* error
 );
 
 const char* vkresult_to_string(VkResult result);
@@ -1047,6 +1060,54 @@ vulkano_create_sampler(
         return VK_NULL_HANDLE;
     }
     return sampler;
+}
+
+VkSemaphore
+vulkano_create_semaphore(
+    struct vulkano* vk, struct VkSemaphoreCreateInfo info, struct vulkano_error* error
+)
+{
+    DEFAULT0(info.sType, VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+    VkSemaphore semaphore;
+    VkResult result = vkCreateSemaphore(vk->device, &info, NULL, &semaphore);
+    if (result != VK_SUCCESS) {
+        vulkano_out_of_memory(error, result);
+        return VK_NULL_HANDLE;
+    }
+    return semaphore;
+}
+
+VkFence
+vulkano_create_fence(
+    struct vulkano* vk, struct VkFenceCreateInfo info, struct vulkano_error* error
+)
+{
+    DEFAULT0(info.sType, VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+    VkFence fence;
+    VkResult result = vkCreateFence(vk->device, &info, NULL, &fence);
+    if (result != VK_SUCCESS) {
+        vulkano_out_of_memory(error, result);
+        return VK_NULL_HANDLE;
+    }
+    return fence;
+}
+
+void
+vulkano_allocate_command_buffers(
+    struct vulkano* vk,
+    struct VkCommandBufferAllocateInfo info,
+    VkCommandBuffer* command_buffers,
+    struct vulkano_error* error
+)
+{
+    DEFAULT0(info.sType, VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+    DEFAULT0(info.commandPool, vk->resources.command_pool);
+    DEFAULT0(info.commandBufferCount, 1);
+    VkResult result = vkAllocateCommandBuffers(vk->device, &info, command_buffers);
+    if (result != VK_SUCCESS) {
+        vulkano_out_of_memory(error, result);
+        return;
+    }
 }
 
 void
@@ -1791,59 +1852,43 @@ vulkano_create_rendering_state(struct vulkano* vk, struct vulkano_error* error)
     assert(vk->device);
     assert(vk->gpu.handle);
 
-    struct VkCommandBufferAllocateInfo allocate_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = vk->resources.command_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-    struct VkSemaphoreCreateInfo semaphore_info = {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-    };
-    struct VkFenceCreateInfo fence_info = {
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .flags = VK_FENCE_CREATE_SIGNALED_BIT,
-    };
-    for (uint32_t i = 0; i < VULKANO_CONCURRENT_FRAMES; i++) {
-        VkResult result = vkAllocateCommandBuffers(
-            vk->device, &allocate_info, vk->rendering.command_buffers + i
-        );
-        if (result != VK_SUCCESS) {
-            error->code = VULKANO_ERROR_CODE_FAILED_RESOURCE_ALLOCATION;
-            error->result = result;
-            vulkano_write_error_message(error, "failed to allocate command buffer");
-            return;
-        }
+    static const uint32_t FRAME_COUNT =
+        sizeof(vk->rendering.frames) / sizeof(vk->rendering.frames[0]);
 
-        result = vkCreateSemaphore(
-            vk->device, &semaphore_info, NULL, vk->rendering.image_ready + i
+    for (uint32_t frame_index = 0; frame_index < FRAME_COUNT; frame_index++) {
+        vulkano_allocate_command_buffers(
+            vk,
+            (struct VkCommandBufferAllocateInfo){
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = vk->resources.command_pool,
+                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            },
+            &vk->rendering.frames[frame_index].command_buffer,
+            error
         );
-        if (result != VK_SUCCESS) {
-            error->code = VULKANO_ERROR_CODE_FAILED_RESOURCE_CREATION;
-            error->result = result;
-            vulkano_write_error_message(error, "failed to create vulkan semaphore");
-            return;
-        }
-
-        result = vkCreateSemaphore(
-            vk->device, &semaphore_info, NULL, vk->rendering.rendering_complete + i
+        vk->rendering.frames[frame_index].frame_presented = vulkano_create_fence(
+            vk,
+            (struct VkFenceCreateInfo){
+                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+            },
+            error
         );
-        if (result != VK_SUCCESS) {
-            error->code = VULKANO_ERROR_CODE_FAILED_RESOURCE_CREATION;
-            error->result = result;
-            vulkano_write_error_message(error, "failed to create vulkan semaphore");
-            return;
-        }
-
-        result = vkCreateFence(
-            vk->device, &fence_info, NULL, vk->rendering.frame_complete + i
+        vk->rendering.frames[frame_index].image_ready = vulkano_create_semaphore(
+            vk,
+            (struct VkSemaphoreCreateInfo){
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            },
+            error
         );
-        if (result != VK_SUCCESS) {
-            error->code = VULKANO_ERROR_CODE_FAILED_RESOURCE_CREATION;
-            error->result = result;
-            vulkano_write_error_message(error, "failed to create vulkan fence");
-            return;
-        }
+        vk->rendering.frames[frame_index].rendering_complete = vulkano_create_semaphore(
+            vk,
+            (struct VkSemaphoreCreateInfo){
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            },
+            error
+        );
     }
 }
 
@@ -1851,12 +1896,14 @@ void
 vulkano_destroy_rendering_state(struct vulkano* vk)
 {
     for (uint32_t i = 0; i < VULKANO_CONCURRENT_FRAMES; i++) {
-        if (vk->rendering.image_ready[i])
-            vkDestroySemaphore(vk->device, vk->rendering.image_ready[i], NULL);
-        if (vk->rendering.rendering_complete[i])
-            vkDestroySemaphore(vk->device, vk->rendering.rendering_complete[i], NULL);
-        if (vk->rendering.frame_complete[i])
-            vkDestroyFence(vk->device, vk->rendering.frame_complete[i], NULL);
+        if (vk->rendering.frames[i].image_ready)
+            vkDestroySemaphore(vk->device, vk->rendering.frames[i].image_ready, NULL);
+        if (vk->rendering.frames[i].rendering_complete)
+            vkDestroySemaphore(
+                vk->device, vk->rendering.frames[i].rendering_complete, NULL
+            );
+        if (vk->rendering.frames[i].frame_presented)
+            vkDestroyFence(vk->device, vk->rendering.frames[i].frame_presented, NULL);
     }
     vk->rendering = (struct vulkano_rendering_state){0};
 }
@@ -1949,18 +1996,19 @@ vulkano_begin_frame(
     struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error
 )
 {
-    uint64_t frame_index = vk->rendering.frame_count % VULKANO_CONCURRENT_FRAMES;
+    static const uint32_t FRAME_COUNT =
+        sizeof(vk->rendering.frames) / sizeof(vk->rendering.frames[0]);
+    uint64_t frame_index = vk->rendering.frame_count % FRAME_COUNT;
 
-    frame->command_buffer = vk->rendering.command_buffers[frame_index];
+    float clear[4];
+    memcpy(clear, frame->clear, sizeof(clear));
+
+    *frame = vk->rendering.frames[frame_index];
     frame->number = vk->rendering.frame_count;
+    memcpy(frame->clear, clear, sizeof(clear));
 
-    VkResult result = vkWaitForFences(
-        vk->device,
-        1,
-        vk->rendering.frame_complete + frame_index,
-        VK_TRUE,
-        VULKANO_TIMEOUT
-    );
+    VkResult result =
+        vkWaitForFences(vk->device, 1, &frame->frame_presented, VK_TRUE, VULKANO_TIMEOUT);
     if (result == VK_TIMEOUT) {
         error->code = VULKANO_ERROR_CODE_TIMEOUT;
         error->result = result;
@@ -1976,11 +2024,12 @@ vulkano_begin_frame(
         return;
     }
 
-    result = vkResetFences(vk->device, 1, vk->rendering.frame_complete + frame_index);
+    result = vkResetFences(vk->device, 1, &frame->frame_presented);
     if (result != VK_SUCCESS) {
         vulkano_out_of_memory(error, result);
         return;
     }
+
     result = vkResetCommandBuffer(frame->command_buffer, 0);
     if (result != VK_SUCCESS) {
         vulkano_out_of_memory(error, result);
@@ -1992,7 +2041,7 @@ acquire_image:
         vk->device,
         vk->swapchain.handle,
         VULKANO_TIMEOUT,
-        vk->rendering.image_ready[frame_index],
+        frame->image_ready,
         VK_NULL_HANDLE,
         &frame->image_index
     );
@@ -2000,21 +2049,15 @@ acquire_image:
         vulkano_destroy_swapchain(vk);
         vulkano_create_swapchain(vk, error);
         if (error->code) return;
-        vkDestroySemaphore(vk->device, vk->rendering.image_ready[frame_index], NULL);
-        struct VkSemaphoreCreateInfo semaphore_info = {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        };
-        VkResult semaphore_result = vkCreateSemaphore(
-            vk->device, &semaphore_info, NULL, vk->rendering.image_ready + frame_index
+        vkDestroySemaphore(vk->device, frame->image_ready, NULL);
+        frame->image_ready = vulkano_create_semaphore(
+            vk,
+            (struct VkSemaphoreCreateInfo){
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            },
+            error
         );
-        if (semaphore_result != VK_SUCCESS) {
-            error->code = VULKANO_ERROR_CODE_FAILED_RESOURCE_CREATION;
-            error->result = result;
-            vulkano_write_error_message(
-                error, "failed recreating semaphore after swapchain recreation"
-            );
-            return;
-        }
+        if (error->code) return;
         goto acquire_image;
     }
     if (result == VK_TIMEOUT) {
@@ -2028,7 +2071,7 @@ acquire_image:
         return;
     }
     if (result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
-        // TODO: handle this case
+        // FIXME: handle this case
     }
     if (result != VK_SUCCESS) {
         vulkano_fatal_error(error, result);
@@ -2046,15 +2089,16 @@ acquire_image:
         return;
     }
 
-    VkClearValue clear = {
-        frame->clear[0], frame->clear[1], frame->clear[2], frame->clear[3]};
+    VkClearValue clear_value = {
+        {frame->clear[0], frame->clear[1], frame->clear[2], frame->clear[3]},
+    };
     struct VkRenderPassBeginInfo render_begin_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = VULKANO_RENDER_PASS(vk, 0),
         .framebuffer = frame->framebuffer,
         .renderArea.extent = vk->swapchain.extent,
         .clearValueCount = 1,
-        .pClearValues = &clear,
+        .pClearValues = &clear_value,
     };
     vkCmdBeginRenderPass(
         frame->command_buffer, &render_begin_info, VK_SUBPASS_CONTENTS_INLINE
@@ -2079,17 +2123,16 @@ vulkano_submit_frame(
     struct VkSubmitInfo submit_info = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = vk->rendering.image_ready + frame_index,
+        .pWaitSemaphores = &frame->image_ready,
         .pWaitDstStageMask = wait_mask,
         .commandBufferCount = 1,
         .pCommandBuffers = &frame->command_buffer,
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = vk->rendering.rendering_complete + frame_index,
+        .pSignalSemaphores = &frame->rendering_complete,
     };
 
-    result = vkQueueSubmit(
-        vk->gpu.graphics_queue, 1, &submit_info, vk->rendering.frame_complete[frame_index]
-    );
+    result =
+        vkQueueSubmit(vk->gpu.graphics_queue, 1, &submit_info, frame->frame_presented);
     if (IS_VULKAN_MEMORY_ERROR(result)) {
         vulkano_out_of_memory(error, result);
         return;
@@ -2102,7 +2145,7 @@ vulkano_submit_frame(
     VkPresentInfoKHR present_info = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = vk->rendering.rendering_complete + frame_index,
+        .pWaitSemaphores = &frame->rendering_complete,
         .swapchainCount = 1,
         .pSwapchains = &vk->swapchain.handle,
         .pImageIndices = &frame->image_index,
