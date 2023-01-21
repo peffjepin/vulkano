@@ -173,6 +173,7 @@ struct vulkano_swapchain_state {
 struct vulkano_gpu {
     VkPhysicalDevice handle;
     struct VkPhysicalDeviceMemoryProperties memory_properties;
+    struct VkPhysicalDeviceProperties properties;
 
     VkSurfaceFormatKHR selected_swapchain_format;
     VkPresentModeKHR selected_present_mode;
@@ -809,8 +810,8 @@ confirm_gpu_selection(
     // ensure all required gpu extensions are supported
     if (!vulkano_gpu_supports_extensions(gpu->handle, extension_count, extensions)) {
         LOGF(
-            "  GPU: [%s] failed requirements check:\ndoes not support all required "
-            "extensions",
+            "  GPU: [%s] failed requirements check: does not support all required "
+            "extensions\n",
             gpu_name(gpu->handle)
         );
         return false;
@@ -839,13 +840,14 @@ confirm_gpu_selection(
         if (suitable_device) {
             gpu->graphics_queue_family = i;
             vkGetPhysicalDeviceMemoryProperties(gpu->handle, &gpu->memory_properties);
+            vkGetPhysicalDeviceProperties(gpu->handle, &gpu->properties);
             return true;
         }
     }
 
     LOGF(
-        "  GPU: [%s] failed requirements check:\ndoes not support all required "
-        "queues",
+        "  GPU: [%s] failed requirements check: does not support all required "
+        "queues\n",
         gpu_name(gpu->handle)
     );
     return false;
