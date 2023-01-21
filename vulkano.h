@@ -325,10 +325,7 @@ struct vulkano_frame {
 };
 
 void vulkano_begin_frame(
-    struct vulkano* vk,
-    struct vulkano_frame* frame,
-    uint32_t render_pass_index,
-    struct vulkano_error* error
+    struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error
 );
 void vulkano_submit_frame(
     struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error
@@ -581,8 +578,6 @@ vulkano_init(struct vulkano_config config, struct vulkano_error* error)
 {
     struct vulkano vk = {0};
     const char* surface_error = NULL;
-    VkPresentModeKHR present_mode;
-    struct VkSurfaceFormatKHR surface_format;
 
     if (!config.surface_creation) {
         error->code = VULKANO_ERROR_CODE_BAD_CONFIGURATION;
@@ -1907,10 +1902,7 @@ cleanup:
 
 void
 vulkano_begin_frame(
-    struct vulkano* vk,
-    struct vulkano_frame* frame,
-    uint32_t render_pass_index,
-    struct vulkano_error* error
+    struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error
 )
 {
     uint64_t frame_index = vk->rendering.frame_count % VULKANO_CONCURRENT_FRAMES;

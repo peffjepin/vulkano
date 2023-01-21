@@ -251,7 +251,7 @@ main()
 
     for (uint32_t i = 0; i < 1000; i++) {
         struct vulkano_frame frame = {.clear = {0.012, 0.01, 0.01, 0.0}};
-        vulkano_begin_frame(vk, &frame, 0, &error);
+        vulkano_begin_frame(vk, &frame, &error);
         if (error.code) goto cleanup;
 
         vkCmdBindPipeline(
