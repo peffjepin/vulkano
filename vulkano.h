@@ -467,6 +467,12 @@ VkCommandPool vulkano_create_command_pool(
     uint32_t queue_family,
     struct vulkano_error* error
 );
+VkImageView vulkano_create_image_view(
+    struct vulkano* vk, struct VkImageViewCreateInfo info, struct vulkano_error* error
+);
+VkSampler vulkano_create_sampler(
+    struct vulkano* vk, struct VkSamplerCreateInfo info, struct vulkano_error* error
+);
 
 const char* vkresult_to_string(VkResult result);
 const char* present_mode_to_string(VkPresentModeKHR mode);
@@ -1005,6 +1011,42 @@ vulkano_create_command_pool(
     }
 
     return pool;
+}
+
+VkImageView
+vulkano_create_image_view(
+    struct vulkano* vk, struct VkImageViewCreateInfo info, struct vulkano_error* error
+)
+{
+    DEFAULT0(info.sType, VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+    DEFAULT0(info.viewType, VK_IMAGE_VIEW_TYPE_2D);
+    DEFAULT0(info.format, vk->gpu.selected_swapchain_format.format);
+    DEFAULT0(info.subresourceRange.aspectMask, VK_IMAGE_ASPECT_COLOR_BIT);
+    DEFAULT0(info.subresourceRange.levelCount, VK_IMAGE_ASPECT_COLOR_BIT);
+    DEFAULT0(info.subresourceRange.layerCount, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VkImageView image_view;
+    VkResult result = vkCreateImageView(vk->device, &info, NULL, &image_view);
+    if (result != VK_SUCCESS) {
+        vulkano_out_of_memory(error, result);
+        return VK_NULL_HANDLE;
+    }
+    return image_view;
+}
+
+VkSampler
+vulkano_create_sampler(
+    struct vulkano* vk, struct VkSamplerCreateInfo info, struct vulkano_error* error
+)
+{
+    DEFAULT0(info.sType, VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
+    VkSampler sampler;
+    VkResult result = vkCreateSampler(vk->device, &info, NULL, &sampler);
+    if (result != VK_SUCCESS) {
+        vulkano_out_of_memory(error, result);
+        return VK_NULL_HANDLE;
+    }
+    return sampler;
 }
 
 void
