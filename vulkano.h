@@ -2049,15 +2049,6 @@ acquire_image:
         vulkano_destroy_swapchain(vk);
         vulkano_create_swapchain(vk, error);
         if (error->code) return;
-        vkDestroySemaphore(vk->device, frame->image_ready, NULL);
-        frame->image_ready = vulkano_create_semaphore(
-            vk,
-            (struct VkSemaphoreCreateInfo){
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            },
-            error
-        );
-        if (error->code) return;
         goto acquire_image;
     }
     if (result == VK_TIMEOUT) {
