@@ -1,6 +1,6 @@
 CC ?= cc
 GLSLC ?= glslc
-FLAGS = -Wall -Wextra -Wpedantic -std=c11
+FLAGS = -Wall -Wextra -Wpedantic -std=c11 -g
 LINK = -lvulkan -lSDL2 -lm
 
 .PHONY: clean
