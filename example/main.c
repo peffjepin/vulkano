@@ -106,10 +106,10 @@ main(void)
         vulkano_create_pipeline_layout(&vksdl.vk, (struct VkPipelineLayoutCreateInfo){0}, &error);
     VkPipeline pipeline = vulkano_create_graphics_pipeline(
         &vksdl.vk,
-        (struct VkGraphicsPipelineCreateInfo){
-            .stageCount = 2,
-            .pStages =
-                (struct VkPipelineShaderStageCreateInfo[]){
+        (struct graphics_pipeline_create_info){
+            .stage_count = 2,
+            .stages =
+                {
                     {
                         .stage = VK_SHADER_STAGE_VERTEX_BIT,
                         .module = vertex_shader_module,
@@ -121,115 +121,103 @@ main(void)
                         .pName = "main",
                     },
                 },
-            .pVertexInputState =
-                (struct VkPipelineVertexInputStateCreateInfo[]){
-                    {
-                        .vertexBindingDescriptionCount = 2,
-                        .pVertexBindingDescriptions =
-                            (struct VkVertexInputBindingDescription[]){
-                                {
-                                    .binding = 0,
-                                    .stride = sizeof(struct vertex),
-                                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                                },
-                                {
-                                    .binding = 1,
-                                    .stride = sizeof(struct vertex_instanced),
-                                    .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE,
-                                },
+            .vertex_input_state =
+                {
+                    .vertexBindingDescriptionCount = 2,
+                    .pVertexBindingDescriptions =
+                        (struct VkVertexInputBindingDescription[]){
+                            {
+                                .binding = 0,
+                                .stride = sizeof(struct vertex),
+                                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
                             },
-                        .vertexAttributeDescriptionCount = 4,
-                        .pVertexAttributeDescriptions =
-                            (struct VkVertexInputAttributeDescription[]){
-                                {
-                                    .binding = 0,
-                                    .location = 0,
-                                    .format = VK_FORMAT_R32G32_SFLOAT,
-                                    .offset = offsetof(struct vertex, position),
-                                },
-                                {
-                                    .binding = 0,
-                                    .location = 1,
-                                    .format = VK_FORMAT_R32G32B32_SFLOAT,
-                                    .offset = offsetof(struct vertex, color),
-                                },
-                                {
-                                    .binding = 1,
-                                    .location = 2,
-                                    .format = VK_FORMAT_R32_SFLOAT,
-                                    .offset = offsetof(struct vertex_instanced, scale),
-                                },
-                                {
-                                    .binding = 1,
-                                    .location = 3,
-                                    .format = VK_FORMAT_R32G32_SFLOAT,
-                                    .offset = offsetof(struct vertex_instanced, offset),
-                                },
+                            {
+                                .binding = 1,
+                                .stride = sizeof(struct vertex_instanced),
+                                .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE,
                             },
-                    },
-                },
-            .pInputAssemblyState =
-                (struct VkPipelineInputAssemblyStateCreateInfo[]){
-                    {
-                        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                    },
-                },
-            .pRasterizationState =
-                (struct VkPipelineRasterizationStateCreateInfo[]){
-                    {
-                        .polygonMode = VK_POLYGON_MODE_FILL,
-                        .cullMode = VK_CULL_MODE_BACK_BIT,
-                        .frontFace = VK_FRONT_FACE_CLOCKWISE,
-                        .lineWidth = 1,
-                    },
-                },
-            .pViewportState =
-                (struct VkPipelineViewportStateCreateInfo[]){
-                    {
-                        .viewportCount = 1,
-                        .pViewports =
-                            (struct VkViewport[]){
-                                VULKANO_VIEWPORT(&vksdl.vk),
+                        },
+                    .vertexAttributeDescriptionCount = 4,
+                    .pVertexAttributeDescriptions =
+                        (struct VkVertexInputAttributeDescription[]){
+                            {
+                                .binding = 0,
+                                .location = 0,
+                                .format = VK_FORMAT_R32G32_SFLOAT,
+                                .offset = offsetof(struct vertex, position),
                             },
-                        .scissorCount = 1,
-                        .pScissors =
-                            (struct VkRect2D[]){
-                                VULKANO_SCISSOR(&vksdl.vk),
+                            {
+                                .binding = 0,
+                                .location = 1,
+                                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                                .offset = offsetof(struct vertex, color),
                             },
-                    },
-                },
-            .pColorBlendState =
-                (struct VkPipelineColorBlendStateCreateInfo[]){
-                    {
-                        .attachmentCount = 1,
-                        .pAttachments =
-                            (struct VkPipelineColorBlendAttachmentState[]){
-                                {
-                                    .blendEnable = VK_TRUE,
-                                    .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-                                    .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-                                    .colorBlendOp = VK_BLEND_OP_ADD,
-                                    .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-                                    .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-                                    .alphaBlendOp = VK_BLEND_OP_ADD,
-                                    .colorWriteMask = VK_COLOR_COMPONENT_A_BIT | VK_COLOR_COMPONENT_B_BIT |
-                                                      VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_R_BIT,
-                                },
+                            {
+                                .binding = 1,
+                                .location = 2,
+                                .format = VK_FORMAT_R32_SFLOAT,
+                                .offset = offsetof(struct vertex_instanced, scale),
                             },
-                    },
-                },
-            .pDynamicState =
-                (struct VkPipelineDynamicStateCreateInfo[]){
-                    {
-                        .dynamicStateCount = 2,
-                        .pDynamicStates =
-                            (VkDynamicState[]){
-                                VK_DYNAMIC_STATE_SCISSOR,
-                                VK_DYNAMIC_STATE_VIEWPORT,
+                            {
+                                .binding = 1,
+                                .location = 3,
+                                .format = VK_FORMAT_R32G32_SFLOAT,
+                                .offset = offsetof(struct vertex_instanced, offset),
                             },
-                    },
+                        },
                 },
-            .renderPass = render_pass,
+            .input_assembly_state =
+                {
+                    .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                },
+            .rasterization_state =
+                {
+                    .polygonMode = VK_POLYGON_MODE_FILL,
+                    .cullMode = VK_CULL_MODE_BACK_BIT,
+                    .frontFace = VK_FRONT_FACE_CLOCKWISE,
+                    .lineWidth = 1,
+                },
+            .viewport_state =
+                {
+                    .viewportCount = 1,
+                    .pViewports =
+                        (struct VkViewport[]){
+                            VULKANO_VIEWPORT(&vksdl.vk),
+                        },
+                    .scissorCount = 1,
+                    .pScissors =
+                        (struct VkRect2D[]){
+                            VULKANO_SCISSOR(&vksdl.vk),
+                        },
+                },
+            .color_blend_state =
+                {
+                    .attachmentCount = 1,
+                    .pAttachments =
+                        (struct VkPipelineColorBlendAttachmentState[]){
+                            {
+                                .blendEnable = VK_TRUE,
+                                .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+                                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                                .colorBlendOp = VK_BLEND_OP_ADD,
+                                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                                .alphaBlendOp = VK_BLEND_OP_ADD,
+                                .colorWriteMask = VK_COLOR_COMPONENT_A_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                                  VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_R_BIT,
+                            },
+                        },
+                },
+            .dynamic_state =
+                {
+                    .dynamicStateCount = 2,
+                    .pDynamicStates =
+                        (VkDynamicState[]){
+                            VK_DYNAMIC_STATE_SCISSOR,
+                            VK_DYNAMIC_STATE_VIEWPORT,
+                        },
+                },
+            .render_pass = render_pass,
             .layout = pipeline_layout,
         },
         &error

@@ -166,6 +166,27 @@ struct vulkano_error {
     char                    message[128];
 };
 
+struct graphics_pipeline_create_info {
+    const void*                            next;
+    VkPipelineCreateFlags                  flags;
+    uint32_t                               stage_count;
+    VkPipelineShaderStageCreateInfo        stages[5];
+    VkPipelineVertexInputStateCreateInfo   vertex_input_state;
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_state;
+    VkPipelineTessellationStateCreateInfo  tessellation_state;
+    VkPipelineViewportStateCreateInfo      viewport_state;
+    VkPipelineRasterizationStateCreateInfo rasterization_state;
+    VkPipelineMultisampleStateCreateInfo   multisample_state;
+    VkPipelineDepthStencilStateCreateInfo  depth_stencil_state;
+    VkPipelineColorBlendStateCreateInfo    color_blend_state;
+    VkPipelineDynamicStateCreateInfo       dynamic_state;
+    VkPipelineLayout                       layout;
+    VkRenderPass                           render_pass;
+    uint32_t                               subpass;
+    VkPipeline                             base_pipeline_handle;
+    int32_t                                base_pipeline_index;
+};
+
 #ifdef VULKANO_INTEGRATE_SDL
 // title, width, height have defaults
 struct sdl_config {
@@ -219,7 +240,7 @@ vulkano_create_descriptor_set_layout(struct vulkano*, struct VkDescriptorSetLayo
 VkDescriptorPool
 vulkano_create_descriptor_pool(struct vulkano*, struct VkDescriptorPoolCreateInfo, struct vulkano_error*);
 VkPipeline
-vulkano_create_graphics_pipeline(struct vulkano*, struct VkGraphicsPipelineCreateInfo, struct vulkano_error*);
+vulkano_create_graphics_pipeline(struct vulkano*, struct graphics_pipeline_create_info, struct vulkano_error*);
 
 VkShaderModule vulkano_create_shader_module(struct vulkano*, struct vulkano_data, struct vulkano_error*);
 VkRenderPass   vulkano_create_render_pass(struct vulkano*, struct VkRenderPassCreateInfo, struct vulkano_error*);
@@ -1162,68 +1183,46 @@ vulkano_create_shader_module(struct vulkano* vk, struct vulkano_data data, struc
 
 VkPipeline
 vulkano_create_graphics_pipeline(
-    struct vulkano* vk, struct VkGraphicsPipelineCreateInfo info, struct vulkano_error* error
+    struct vulkano* vk, struct graphics_pipeline_create_info info, struct vulkano_error* error
 )
 {
     if (error->code) return VK_NULL_HANDLE;
 
-    struct VkPipelineShaderStageCreateInfo        stages[5];
-    struct VkPipelineVertexInputStateCreateInfo   vertex_input = {0};
-    struct VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
-    struct VkPipelineTessellationStateCreateInfo  tessellation = {0};
-    struct VkPipelineViewportStateCreateInfo      viewport = {0};
-    struct VkPipelineRasterizationStateCreateInfo rasterization = {0};
-    struct VkPipelineMultisampleStateCreateInfo   multisampling = {0};
-    struct VkPipelineDepthStencilStateCreateInfo  depth = {0};
-    struct VkPipelineColorBlendStateCreateInfo    blend = {0};
-    struct VkPipelineDynamicStateCreateInfo       dynamic = {0};
-
-    if (info.pVertexInputState) vertex_input = *info.pVertexInputState;
-    if (info.pInputAssemblyState) input_assembly = *info.pInputAssemblyState;
-    if (info.pTessellationState) tessellation = *info.pTessellationState;
-    if (info.pViewportState) viewport = *info.pViewportState;
-    if (info.pRasterizationState) rasterization = *info.pRasterizationState;
-    if (info.pMultisampleState) multisampling = *info.pMultisampleState;
-    if (info.pDepthStencilState) depth = *info.pDepthStencilState;
-    if (info.pColorBlendState) blend = *info.pColorBlendState;
-    if (info.pDynamicState) dynamic = *info.pDynamicState;
-
-    for (size_t i = 0; i < info.stageCount; i++) {
-        stages[i] = info.pStages[i];
-        stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        DEFAULT0(stages[i].pName, "main");
+    for (size_t i = 0; i < info.stage_count; i++) {
+        info.stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        DEFAULT0(info.stages[i].pName, "main");
     }
-    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    tessellation.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
-    viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    rasterization.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    info.vertex_input_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    info.input_assembly_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    info.tessellation_state.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+    info.viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    info.rasterization_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    info.multisample_state.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    info.depth_stencil_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    info.color_blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    info.dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 
-    DEFAULT0(multisampling.rasterizationSamples, VK_SAMPLE_COUNT_1_BIT);
+    DEFAULT0(info.multisample_state.rasterizationSamples, VK_SAMPLE_COUNT_1_BIT);
 
     struct VkGraphicsPipelineCreateInfo processed_info = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .flags = info.flags,
-        .stageCount = info.stageCount,
-        .pStages = stages,
-        .pVertexInputState = &vertex_input,
-        .pInputAssemblyState = &input_assembly,
-        .pTessellationState = &tessellation,
-        .pViewportState = &viewport,
-        .pRasterizationState = &rasterization,
-        .pMultisampleState = &multisampling,
-        .pDepthStencilState = &depth,
-        .pColorBlendState = &blend,
-        .pDynamicState = &dynamic,
+        .stageCount = info.stage_count,
+        .pStages = info.stages,
+        .pVertexInputState = &info.vertex_input_state,
+        .pInputAssemblyState = &info.input_assembly_state,
+        .pTessellationState = &info.tessellation_state,
+        .pViewportState = &info.viewport_state,
+        .pRasterizationState = &info.rasterization_state,
+        .pMultisampleState = &info.multisample_state,
+        .pDepthStencilState = &info.depth_stencil_state,
+        .pColorBlendState = &info.color_blend_state,
+        .pDynamicState = &info.dynamic_state,
         .layout = info.layout,
-        .renderPass = info.renderPass,
+        .renderPass = info.render_pass,
         .subpass = info.subpass,
-        .basePipelineHandle = info.basePipelineHandle,
-        .basePipelineIndex = info.basePipelineIndex,
+        .basePipelineHandle = info.base_pipeline_handle,
+        .basePipelineIndex = info.base_pipeline_index,
     };
 
     VkPipeline pipeline;

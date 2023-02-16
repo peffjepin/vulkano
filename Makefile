@@ -12,6 +12,6 @@ demo: example/main.c shader.vert.spv shader.frag.spv
 	$(CC) $< $(LINK) $(FLAGS) -o $@
 
 clean:
-	rm shader.vert.spv
-	rm shader.frag.spv
-	rm demo
+	-rm shader.vert.spv
+	-rm shader.frag.spv
+	-rm demo
