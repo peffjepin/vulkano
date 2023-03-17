@@ -2,6 +2,7 @@
 #define VULKANO_H
 
 #include <assert.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -11,16 +12,16 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 
-// available flags:
-
+// available preprocessor define flags:
+//
 // VULKANO_DISABLE_VALIDATION_LAYERS
 // VULKANO_ENABLE_DEFAULT_VALIDATION_LAYERS
 // VULKANO_ENABLE_DEFAULT_GRAPHICS_EXTENSIONS
 // VULKANO_INTEGRATE_SDL
-// VULKANO_LOG_ERRORS
+// VULKANO_DISABLE_LOGGING
 
-#ifndef VULKANO_LOG
-#define VULKANO_LOG stdout
+#ifndef VULKANO_LOG_FILE
+#define VULKANO_LOG_FILE stdout
 #endif
 
 #ifndef VULKANO_TIMEOUT
@@ -37,7 +38,6 @@ typedef int (*present_mode_compare_function)(VkPresentModeKHR*, VkPresentModeKHR
 
 // returns NULL on success, or an error message on an error
 typedef const char* (*surface_creation_function)(VkInstance, VkSurfaceKHR*);
-
 // tells the library how to query for window size
 typedef void (*query_size_function)(uint32_t* width, uint32_t* height);
 
@@ -60,13 +60,13 @@ struct vulkano_config {
 };
 
 struct vulkano_data {
-    uint32_t length;
-    uint8_t* bytes;
+    uint32_t size;
+    uint8_t* data;
 };
 
 struct vulkano_image_data {
-    uint32_t length;
-    uint8_t* bytes;
+    uint32_t size;
+    uint8_t* pixels;
     uint32_t width;
     uint32_t height;
     uint32_t channels;
@@ -88,6 +88,16 @@ struct vulkano_image {
     VkImageLayout         layout;
 };
 
+struct vulkano_sampler {
+    struct vulkano_image image;
+    VkImageView          view;
+    VkSampler            handle;
+};
+
+// TODO: this seems like it belongs with the swapchain, but has a separate
+// lifetime because it's not recreated when the swapchain resources are recreated
+// on resize. It works as is for now, but may be worth redesigning slightly in the
+// future.
 struct vulkano_per_frame_state {
     VkSemaphore     image_ready_for_use;
     VkSemaphore     rendering_commands_complete;
@@ -106,10 +116,10 @@ struct vulkano_frame {
 };
 
 struct vulkano_swapchain {
-    VkSwapchainKHR    handle;
-    VkRenderPass      render_pass;
-    struct VkExtent2D extent;
-    uint32_t          image_count;
+    VkSwapchainKHR handle;
+    VkRenderPass   render_pass;
+    VkExtent2D     extent;
+    uint32_t       image_count;
 
     VkImageView*          image_views;
     struct vulkano_image* depth_images;
@@ -118,9 +128,9 @@ struct vulkano_swapchain {
 };
 
 struct vulkano_gpu {
-    VkPhysicalDevice                        handle;
-    struct VkPhysicalDeviceMemoryProperties memory_properties;
-    struct VkPhysicalDeviceProperties       properties;
+    VkPhysicalDevice                 handle;
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    VkPhysicalDeviceProperties       properties;
 
     VkSurfaceFormatKHR configured_surface_format;
     VkPresentModeKHR   configured_present_mode;
@@ -144,29 +154,18 @@ struct vulkano {
     uint32_t frame_counter;
 };
 
-enum vulkano_error_code {
-    VULKANO_ERROR_CODE_OK = 0,
-    VULKANO_ERROR_CODE_BAD_CONFIGURATION,
+typedef enum vulkano_error {
+    VULKANO_ERROR_CODE_SUCCESS = 0,
     VULKANO_ERROR_CODE_OUT_OF_MEMORY,
+    VULKANO_ERROR_CODE_MINIMIZED,
     VULKANO_ERROR_CODE_UNSUPPORTED_VALIDATION_LAYER,
     VULKANO_ERROR_CODE_UNSUPPORTED_INSTANCE_EXTENSION,
-    VULKANO_ERROR_CODE_SURFACE_CREATION_FAILED,
-    VULKANO_ERROR_CODE_NO_GPU_AVAILABLE,
     VULKANO_ERROR_CODE_NO_SUITABLE_GPU_AVAILABLE,
     VULKANO_ERROR_CODE_INVALID_SWAPCHAIN_IMAGE_COUNT,
-    VULKANO_ERROR_CODE_TIMEOUT,
     VULKANO_ERROR_CODE_FATAL_ERROR,
-    VULKANO_ERROR_CODE_MEMORY_REQUIREMENTS_UNFULFILLED,
-    VULKANO_ERROR_CODE_VALIDATION,
-};
+} VulkanoError;
 
-struct vulkano_error {
-    enum vulkano_error_code code;
-    VkResult                result;
-    char                    message[128];
-};
-
-struct graphics_pipeline_create_info {
+struct vulkano_pipeline_config {
     const void*                            next;
     VkPipelineCreateFlags                  flags;
     uint32_t                               stage_count;
@@ -187,6 +186,9 @@ struct graphics_pipeline_create_info {
     int32_t                                base_pipeline_index;
 };
 
+struct vulkano vulkano_create(struct vulkano_config, VulkanoError*);
+void           vulkano_destroy(struct vulkano*);
+
 #ifdef VULKANO_INTEGRATE_SDL
 // title, width, height have defaults
 struct sdl_config {
@@ -204,61 +206,61 @@ struct vulkano_sdl {
     struct SDL_Window* sdl;
 };
 
-struct vulkano_sdl vulkano_sdl_create(struct vulkano_config, struct sdl_config, struct vulkano_error*);
+// clang-format off
+
+struct vulkano_sdl vulkano_sdl_create(struct vulkano_config, struct sdl_config, VulkanoError*);
 void               vulkano_sdl_destroy(struct vulkano_sdl*);
+struct vulkano     vulkano_from_sdl(struct vulkano_config, struct SDL_Window*, VulkanoError*);
 #endif
 
-struct vulkano vulkano_create(struct vulkano_config, struct vulkano_error*);
-void           vulkano_destroy(struct vulkano*);
+void vulkano_configure_swapchain(struct vulkano*, VkRenderPass, uint32_t image_count, VulkanoError*);
+void vulkano_frame_acquire(struct vulkano*, struct vulkano_frame*, VulkanoError*);
+// extra semaphores/fences can be supplied with VkSubmitInfo, (VkSubmitInfo){0} is sufficient in simple cases
+void vulkano_frame_submit(struct vulkano*, struct vulkano_frame*, VkSubmitInfo, VulkanoError*);
 
-void vulkano_configure_swapchain(struct vulkano*, VkRenderPass, uint32_t image_count, struct vulkano_error*);
+struct vulkano_buffer vulkano_buffer_create(struct vulkano*, VkBufferCreateInfo, VkMemoryPropertyFlags, VulkanoError*);
+void                  vulkano_buffer_destroy(struct vulkano*, struct vulkano_buffer*);
+void                  vulkano_buffer_copy_to(struct vulkano*, struct vulkano_buffer*, struct vulkano_data, VulkanoError*);
 
-void vulkano_frame_acquire(struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error);
-// extra semaphores/fences can be supplied with VkSubmitInfo, (struct VkSubmitInfo){0} is sufficient in simple cases
-void vulkano_frame_submit(
-    struct vulkano* vk, struct vulkano_frame* frame, struct VkSubmitInfo, struct vulkano_error* error
-);
+struct vulkano_image vulkano_image_create(struct vulkano*, VkImageCreateInfo, VkMemoryPropertyFlags, VulkanoError*);
+void                 vulkano_image_destroy(struct vulkano*, struct vulkano_image*);
+void                 vulkano_image_copy_to(struct vulkano*, struct vulkano_image*, struct vulkano_image_data, VulkanoError*);
+void                 vulkano_image_change_layout(struct vulkano*, struct vulkano_image*, VkImageLayout, VulkanoError*);
 
-struct vulkano_buffer
-     vulkano_buffer_create(struct vulkano*, struct VkBufferCreateInfo, VkMemoryPropertyFlags, struct vulkano_error*);
-void vulkano_buffer_destroy(struct vulkano*, struct vulkano_buffer*);
-void vulkano_buffer_copy_to(struct vulkano*, struct vulkano_buffer*, struct vulkano_data, struct vulkano_error*);
+struct vulkano_sampler vulkano_sampler_create(struct vulkano*, struct vulkano_image_data, VulkanoError*);
+void                   vulkano_sampler_destroy(struct vulkano*, struct vulkano_sampler*);
 
-struct vulkano_image
-     vulkano_image_create(struct vulkano*, struct VkImageCreateInfo, VkMemoryPropertyFlags, struct vulkano_error*);
-void vulkano_image_destroy(struct vulkano*, struct vulkano_image*);
-void vulkano_image_copy_to(struct vulkano*, struct vulkano_image*, struct vulkano_image_data, struct vulkano_error*);
-void vulkano_image_change_layout(struct vulkano*, struct vulkano_image*, VkImageLayout, struct vulkano_error*);
+VkCommandBuffer vulkano_acquire_single_use_command_buffer(struct vulkano*, VulkanoError*);
+void            vulkano_submit_single_use_command_buffer(struct vulkano*, VkCommandBuffer, VulkanoError*);
 
-VkCommandBuffer vulkano_acquire_single_use_command_buffer(struct vulkano*, struct vulkano_error*);
-void            vulkano_submit_single_use_command_buffer(struct vulkano*, VkCommandBuffer, struct vulkano_error*);
+VkPipelineLayout      vulkano_create_pipeline_layout(struct vulkano*, VkPipelineLayoutCreateInfo, VulkanoError*);
+VkDescriptorSetLayout vulkano_create_descriptor_set_layout(struct vulkano*, VkDescriptorSetLayoutCreateInfo, VulkanoError*);
+VkDescriptorPool      vulkano_create_descriptor_pool(struct vulkano*, VkDescriptorPoolCreateInfo, VulkanoError*);
+VkPipeline            vulkano_create_graphics_pipeline(struct vulkano*, struct vulkano_pipeline_config, VulkanoError*);
 
-VkPipelineLayout
-vulkano_create_pipeline_layout(struct vulkano*, struct VkPipelineLayoutCreateInfo, struct vulkano_error*);
-VkDescriptorSetLayout
-vulkano_create_descriptor_set_layout(struct vulkano*, struct VkDescriptorSetLayoutCreateInfo, struct vulkano_error*);
-VkDescriptorPool
-vulkano_create_descriptor_pool(struct vulkano*, struct VkDescriptorPoolCreateInfo, struct vulkano_error*);
-VkPipeline
-vulkano_create_graphics_pipeline(struct vulkano*, struct graphics_pipeline_create_info, struct vulkano_error*);
+VkShaderModule vulkano_create_shader_module(struct vulkano*, struct vulkano_data, VulkanoError*);
+VkRenderPass   vulkano_create_render_pass(struct vulkano*, VkRenderPassCreateInfo, VulkanoError*);
+VkCommandPool  vulkano_create_command_pool(struct vulkano*, VkCommandPoolCreateInfo, VulkanoError*);
+VkImageView    vulkano_create_image_view(struct vulkano*, VkImageViewCreateInfo, VulkanoError*);
+VkSampler      vulkano_create_sampler(struct vulkano*, VkSamplerCreateInfo, VulkanoError*);
+VkSemaphore    vulkano_create_semaphore(struct vulkano*, VkSemaphoreCreateInfo, VulkanoError*);
+VkFence        vulkano_create_fence(struct vulkano*, VkFenceCreateInfo, VulkanoError*);
 
-VkShaderModule vulkano_create_shader_module(struct vulkano*, struct vulkano_data, struct vulkano_error*);
-VkRenderPass   vulkano_create_render_pass(struct vulkano*, struct VkRenderPassCreateInfo, struct vulkano_error*);
-VkCommandPool  vulkano_create_command_pool(struct vulkano*, struct VkCommandPoolCreateInfo, struct vulkano_error*);
-VkImageView    vulkano_create_image_view(struct vulkano*, struct VkImageViewCreateInfo, struct vulkano_error*);
-VkSampler      vulkano_create_sampler(struct vulkano*, struct VkSamplerCreateInfo, struct vulkano_error*);
-VkSemaphore    vulkano_create_semaphore(struct vulkano*, struct VkSemaphoreCreateInfo, struct vulkano_error*);
-VkFence        vulkano_create_fence(struct vulkano*, struct VkFenceCreateInfo, struct vulkano_error*);
+void vulkano_allocate_command_buffers(struct vulkano*, VkCommandBufferAllocateInfo, VkCommandBuffer[], VulkanoError*);
+void vulkano_allocate_descriptor_sets(struct vulkano*, VkDescriptorSetAllocateInfo, VkDescriptorSet[], VulkanoError*);
 
-void
-vulkano_allocate_command_buffers(struct vulkano*, struct VkCommandBufferAllocateInfo, VkCommandBuffer[], struct vulkano_error*);
+// clang-format on
 
 #define VULKANO_WIDTH(vulkano) (vulkano)->swapchain.extent.width
 #define VULKANO_HEIGHT(vulkano) (vulkano)->swapchain.extent.height
-#define VULKANO_VIEWPORT(vulkano)                                                                                      \
-    (struct VkViewport) { .width = VULKANO_WIDTH(vulkano), .height = VULKANO_HEIGHT(vulkano), .maxDepth = 1.0f }
-#define VULKANO_SCISSOR(vulkano)                                                                                       \
-    (struct VkRect2D) { .extent = (vulkano)->swapchain.extent }
+#define VULKANO_VIEWPORT(vulkano)                                                        \
+    (VkViewport)                                                                         \
+    {                                                                                    \
+        .width = (float)VULKANO_WIDTH(vulkano),                                          \
+        .height = (float)VULKANO_HEIGHT(vulkano), .maxDepth = 1.0f                       \
+    }
+#define VULKANO_SCISSOR(vulkano)                                                         \
+    (VkRect2D) { .extent = (vulkano)->swapchain.extent }
 
 //
 // **************************************************************************************
@@ -270,203 +272,206 @@ vulkano_allocate_command_buffers(struct vulkano*, struct VkCommandBufferAllocate
 
 #ifdef VULKANO_IMPLEMENTATION
 
-#define LOG(message) fprintf(VULKANO_LOG, "%s", message)
-#define LOGF(fmt, ...) fprintf(VULKANO_LOG, fmt, __VA_ARGS__)
+static void
+vulkano_log(const char* label, int line, const char* message)
+{
+#ifndef VULKANO_DISABLE_LOG
+    fprintf(VULKANO_LOG_FILE, "%s (%i): %s", label, line, message);
+#endif
+}
 
-#define CLAMP(min, max, value) ((value < min) ? min : ((value > max) ? max : value))
+static void
+vulkano_logf(const char* label, int line, const char* fmt, ...)
+{
+#ifndef VULKANO_DISABLE_LOG
+    va_list args;
+    va_start(args, fmt);
+    fprintf(VULKANO_LOG_FILE, "%s (%i): ", label, line);
+    vfprintf(VULKANO_LOG_FILE, fmt, args);
+    va_end(args);
+#endif
+}
+
+#define VULKANO_INFO(message) vulkano_log("[INFO]", __LINE__, message);
+#define VULKANO_INFOF(fmt, ...) vulkano_logf("[INFO]", __LINE__, fmt, __VA_ARGS__);
+#define VULKANO_ERROR(message) vulkano_log("[ERROR]", __LINE__, message);
+#define VULKANO_ERRORF(fmt, ...) vulkano_logf("[ERROR]", __LINE__, fmt, __VA_ARGS__);
+
+#define VULKANO_CLAMP(min, max, value)                                                   \
+    ((value < min) ? min : ((value > max) ? max : value))
 
 typedef int (*compare_function)(const void*, const void*);
+
+// forward declare helpers
 
 struct string_array {
     uint32_t     count;
     const char** data;
 };
 
-const char* vkresult_to_string(VkResult);
+struct {
+    size_t count;
+    size_t capacity;
+    void** allocations;
+} init_allocations = {0};
 
-static void
-vulkano_write_error_message(struct vulkano_error* error, const char* message)
-{
-    if (error->result == VK_SUCCESS) error->result = VK_ERROR_UNKNOWN;
-    snprintf(error->message, sizeof(error->message), "%s (%s)", message, vkresult_to_string(error->result));
-#ifdef VULKANO_LOG_ERRORS
-    LOGF("VULKANO ERROR: %s\n", error->message);
-#endif
-}
+// used by initialization functions. these allocations will be freed at
+// the end of initialization
+static void* init_malloc(size_t);
+static void  free_init_allocations(void);
 
-#define IS_VULKAN_MEMORY_ERROR(result)                                                                                 \
-    ((result) == VK_ERROR_OUT_OF_HOST_MEMORY || (result) == VK_ERROR_OUT_OF_DEVICE_MEMORY)
+#define VULKANO_INIT_MALLOC_ARRAY(pointer, capacity)                                     \
+    pointer = init_malloc((sizeof *(pointer)) * capacity)
 
-void
-vulkano_out_of_memory(struct vulkano_error* error, VkResult result)
-{
-    error->result = (result == VK_SUCCESS) ? VK_ERROR_OUT_OF_HOST_MEMORY : result;
-    error->code = VULKANO_ERROR_CODE_OUT_OF_MEMORY;
-    vulkano_write_error_message(error, "out of memory");
-}
+static struct string_array combine_string_arrays_unique(
+    struct string_array array1, struct string_array array2
+);
 
-void
-vulkano_fatal_error(struct vulkano_error* error, VkResult result)
-{
-    if (result == VK_SUCCESS) result = VK_ERROR_UNKNOWN;
+static const char* vkresult_to_string(VkResult);
+static const char* present_mode_to_string(VkPresentModeKHR mode);
+static const char* color_format_to_string(VkFormat fmt);
+static const char* color_space_to_string(VkColorSpaceKHR space);
+static const char* gpu_name(VkPhysicalDevice gpu);
+static int         default_gpu_compare(VkPhysicalDevice*, VkPhysicalDevice*);
+static int default_surface_format_compare(VkSurfaceFormatKHR*, VkSurfaceFormatKHR*);
+static int default_present_modes_compare(VkPresentModeKHR*, VkPresentModeKHR*);
+static int compare_extension_names(
+    const VkExtensionProperties* ext1, const VkExtensionProperties* ext2
+);
+static int compare_layer_properties_name(
+    VkLayerProperties* prop1, VkLayerProperties* prop2
+);
 
-    if (IS_VULKAN_MEMORY_ERROR(result)) {
-        vulkano_out_of_memory(error, result);
-        return;
-    }
+#define VULKANO_CHECK(expression, error)                                                 \
+    do {                                                                                 \
+        if (*error) break;                                                               \
+        VkResult check_result = expression;                                              \
+        if (check_result == VK_ERROR_OUT_OF_HOST_MEMORY ||                               \
+            check_result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {                             \
+            VULKANO_ERRORF("out of memory (%s)\n", vkresult_to_string(check_result));    \
+            *error = VULKANO_ERROR_CODE_OUT_OF_MEMORY;                                   \
+        }                                                                                \
+        else if (check_result != VK_SUCCESS) {                                           \
+            VULKANO_ERRORF(                                                              \
+                "fatal error encountered (%s)\n", vkresult_to_string(check_result)       \
+            );                                                                           \
+            *error = VULKANO_ERROR_CODE_FATAL_ERROR;                                     \
+        }                                                                                \
+    } while (0)
 
-    error->code = (error->code) ? error->code : VULKANO_ERROR_CODE_FATAL_ERROR;
-    error->result = result;
-    vulkano_write_error_message(error, "fatal error encountered");
-}
-
-struct string_array
-combine_string_arrays_unique(struct string_array array1, struct string_array array2, struct vulkano_error* error)
-{
-    uint32_t total_count = array1.count + array2.count;
-    if (total_count == 0) return (struct string_array){.count = 0, .data = NULL};
-
-    struct string_array combined = {
-        .data = malloc((array1.count + array2.count) * sizeof(const char*)),
-    };
-    if (!combined.data) {
-        vulkano_out_of_memory(error, VK_ERROR_OUT_OF_HOST_MEMORY);
-        return (struct string_array){.count = 0, .data = NULL};
-    }
-
-    if (array1.data) {
-        combined.count = array1.count;
-        memcpy(combined.data, array1.data, sizeof(array1.data[0]) * array1.count);
-        qsort(array1.data, array1.count, sizeof(const char*), (compare_function)strcmp);
-    }
-    if (array2.data)
-        for (uint32_t i = 0; i < array2.count; i++) {
-            if (!array1.data ||
-                !bsearch(array2.data[i], array1.data, array1.count, sizeof(array1.data[0]), (compare_function)strcmp))
-                memcpy(combined.data + combined.count++, array2.data + i, sizeof(array1.data[0]));
-        }
-    return combined;
-}
-
-static int
-compare_layer_properties_name(VkLayerProperties* prop1, VkLayerProperties* prop2)
-{
-    return strcmp(prop1->layerName, prop2->layerName);
-}
-
-static int
-compare_extension_names(const VkExtensionProperties* ext1, const VkExtensionProperties* ext2)
-{
-    return strcmp(ext1->extensionName, ext2->extensionName);
-}
+#define DEFAULT0(value, default_value) (value) = ((value)) ? (value) : (default_value)
 
 static void
 create_instance(
-    struct vulkano*       vk,
-    uint32_t              validation_layers_count,
-    const char**          validation_layers,
-    uint32_t              extensions_count,
-    const char**          extensions,
-    struct vulkano_error* error
+    struct vulkano* vk,
+    uint32_t        validation_layers_count,
+    const char**    validation_layers,
+    uint32_t        extensions_count,
+    const char**    extensions,
+    VulkanoError*   error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
 #ifdef VULKANO_DISABLE_VALIDATION_LAYERS
     validation_layers_count = 0;
     validation_layers = NULL;
 #endif
 
-    LOG("required instance extensions:\n");
-    for (uint32_t i = 0; i < extensions_count; i++) LOGF("  %s\n", extensions[i]);
-    LOG("\n");
+    VULKANO_INFO("required instance extensions:\n");
+    for (uint32_t i = 0; i < extensions_count; i++)
+        VULKANO_INFOF("  %s\n", extensions[i]);
+    VULKANO_INFO("\n");
 
-    LOG("required instance validation layers:\n");
-    for (uint32_t i = 0; i < validation_layers_count; i++) LOGF("  %s\n", validation_layers[i]);
-    LOG("\n");
+    VULKANO_INFO("required instance validation layers:\n");
+    for (uint32_t i = 0; i < validation_layers_count; i++)
+        VULKANO_INFOF("  %s\n", validation_layers[i]);
+    VULKANO_INFO("\n");
 
-    VkResult result;
+    // enumerate available validation layers
+    uint32_t available_layers_count = 1;
+    VULKANO_CHECK(
+        vkEnumerateInstanceLayerProperties(&available_layers_count, NULL), error
+    );
+    VkLayerProperties* available_layers;
+    VULKANO_INIT_MALLOC_ARRAY(available_layers, available_layers_count);
+    VULKANO_CHECK(
+        vkEnumerateInstanceLayerProperties(&available_layers_count, available_layers),
+        error
+    );
+    if (*error) return;
 
-    // ensure validation layers are supported
-    //
-    uint32_t available_layers_count;
-    result = vkEnumerateInstanceLayerProperties(&available_layers_count, NULL);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-    VkLayerProperties available_layers[available_layers_count];
-    result = vkEnumerateInstanceLayerProperties(&available_layers_count, available_layers);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    // check that required layers are supported
     qsort(
         available_layers,
         available_layers_count,
         sizeof(VkLayerProperties),
         (compare_function)compare_layer_properties_name
     );
-    unsigned unsupported = 0;
     for (uint32_t i = 0; i < validation_layers_count; i++) {
         VkLayerProperties requested = {0};
-        snprintf(requested.layerName, sizeof(requested.layerName), "%s", validation_layers[i]);
-        bool layer_is_supported = (bool)bsearch(
-            &requested,
-            available_layers,
-            available_layers_count,
-            sizeof(VkLayerProperties),
-            (compare_function)compare_layer_properties_name
+        snprintf(
+            requested.layerName, sizeof(requested.layerName), "%s", validation_layers[i]
         );
-        if (!layer_is_supported) {
-            unsupported++;
-            LOGF("ERROR: unsupported vulkan validation layer: %s\n", validation_layers[i]);
+        if (bsearch(
+                &requested,
+                available_layers,
+                available_layers_count,
+                sizeof(VkLayerProperties),
+                (compare_function)compare_layer_properties_name
+            ) == NULL) {
+            *error = VULKANO_ERROR_CODE_UNSUPPORTED_VALIDATION_LAYER;
+            VULKANO_ERRORF(
+                "unsupported vulkan validation layer: %s\n", validation_layers[i]
+            );
         }
     }
-    if (unsupported) {
-        error->code = VULKANO_ERROR_CODE_UNSUPPORTED_VALIDATION_LAYER;
-        error->result = VK_ERROR_LAYER_NOT_PRESENT;
-        vulkano_write_error_message(error, "unsupported validation layers");
-        return;
-    }
+    if (*error) return;
 
-    // ensure instance extensions are supported
-    uint32_t supported_count;
-    if ((result = vkEnumerateInstanceExtensionProperties(NULL, &supported_count, NULL)) != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-    VkExtensionProperties supported_extensions[supported_count];
-    if ((result = vkEnumerateInstanceExtensionProperties(NULL, &supported_count, supported_extensions)) != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-    qsort(
-        supported_extensions, supported_count, sizeof(VkExtensionProperties), (compare_function)compare_extension_names
+    // enumerate available instance extensions
+    uint32_t supported_count = 1;
+    VULKANO_CHECK(
+        vkEnumerateInstanceExtensionProperties(NULL, &supported_count, NULL), error
     );
-    unsupported = 0;
+    VkExtensionProperties* supported_extensions;
+    VULKANO_INIT_MALLOC_ARRAY(supported_extensions, supported_count);
+    VULKANO_CHECK(
+        vkEnumerateInstanceExtensionProperties(
+            NULL, &supported_count, supported_extensions
+        ),
+        error
+    );
+    if (*error) return;
+
+    // ensure extensions are available
+    qsort(
+        supported_extensions,
+        supported_count,
+        sizeof(VkExtensionProperties),
+        (compare_function)compare_extension_names
+    );
     for (uint32_t i = 0; i < extensions_count; i++) {
         VkExtensionProperties required_extension = {0};
-        snprintf(required_extension.extensionName, sizeof(required_extension.extensionName), "%s", extensions[i]);
-        bool extension_is_supported = (bool)bsearch(
-            &required_extension,
-            supported_extensions,
-            supported_count,
-            sizeof(VkLayerProperties),
-            (compare_function)compare_extension_names
+        snprintf(
+            required_extension.extensionName,
+            sizeof(required_extension.extensionName),
+            "%s",
+            extensions[i]
         );
-        if (!extension_is_supported) {
-            unsupported++;
-            LOGF("unsupported instance extension: %s\n", extensions[i]);
+        if (bsearch(
+                &required_extension,
+                supported_extensions,
+                supported_count,
+                sizeof(required_extension),
+                (compare_function)compare_extension_names
+            ) == NULL) {
+            *error = VULKANO_ERROR_CODE_UNSUPPORTED_INSTANCE_EXTENSION;
+            VULKANO_ERRORF("unsupported instance extension: %s\n", extensions[i]);
         }
     }
-    if (unsupported) {
-        error->code = VULKANO_ERROR_CODE_UNSUPPORTED_INSTANCE_EXTENSION;
-        error->result = VK_ERROR_EXTENSION_NOT_PRESENT;
-        vulkano_write_error_message(error, "unsupported instance extensions");
-        return;
-    }
+    if (*error) return;
 
+    // create instance
     VkInstanceCreateInfo vk_create_info = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .enabledLayerCount = validation_layers_count,
@@ -474,48 +479,46 @@ create_instance(
         .enabledExtensionCount = extensions_count,
         .ppEnabledExtensionNames = extensions,
     };
-    if ((result = vkCreateInstance(&vk_create_info, NULL, &vk->instance)) != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-}
-
-static const char*
-gpu_name(VkPhysicalDevice gpu)
-{
-    static char                buffer[256];
-    VkPhysicalDeviceProperties properties;
-    vkGetPhysicalDeviceProperties(gpu, &properties);
-    snprintf(buffer, sizeof(buffer), "%s", properties.deviceName);
-    return buffer;
+    VULKANO_CHECK(vkCreateInstance(&vk_create_info, NULL, &vk->instance), error);
+    if (*error) return;
 }
 
 static VkPresentModeKHR
 select_present_mode(
-    VkPhysicalDevice gpu, VkSurfaceKHR surface, present_mode_compare_function cmp, struct vulkano_error* error
+    VkPhysicalDevice              gpu,
+    VkSurfaceKHR                  surface,
+    present_mode_compare_function cmp,
+    VulkanoError*                 error
 )
 {
-    if (error->code) return (VkPresentModeKHR)0;
+    if (*error) return (VkPresentModeKHR)0;
 
+    // query capabilities
     VkSurfaceCapabilitiesKHR capabilities;
-    VkResult                 result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu, surface, &capabilities);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return (VkPresentModeKHR)0;
-    }
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu, surface, &capabilities), error
+    );
+    if (*error) return (VkPresentModeKHR)0;
 
-    uint32_t present_modes_count;
-    result = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, surface, &present_modes_count, NULL);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return (VkPresentModeKHR)0;
-    }
-    VkPresentModeKHR present_modes[present_modes_count];
-    result = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, surface, &present_modes_count, present_modes);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return (VkPresentModeKHR)0;
-    }
+    // enumerate available present modes
+    uint32_t present_modes_count = 1;
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfacePresentModesKHR(
+            gpu, surface, &present_modes_count, NULL
+        ),
+        error
+    );
+    VkPresentModeKHR* present_modes;
+    VULKANO_INIT_MALLOC_ARRAY(present_modes, present_modes_count);
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfacePresentModesKHR(
+            gpu, surface, &present_modes_count, present_modes
+        ),
+        error
+    );
+    if (*error) return (VkPresentModeKHR)0;
+
+    // select best mode
     qsort(  // sorted worst->best
         present_modes,
         present_modes_count,
@@ -526,61 +529,81 @@ select_present_mode(
     return present_mode;
 }
 
-static struct VkSurfaceFormatKHR
+static VkSurfaceFormatKHR
 select_surface_format(
-    VkPhysicalDevice gpu, VkSurfaceKHR surface, surface_format_compare_function cmp, struct vulkano_error* error
+    VkPhysicalDevice                gpu,
+    VkSurfaceKHR                    surface,
+    surface_format_compare_function cmp,
+    VulkanoError*                   error
 )
 {
-    if (error->code) return (struct VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
+    if (*error) return (VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
 
+    // query device capabilities
     VkSurfaceCapabilitiesKHR capabilities;
-    VkResult                 result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu, surface, &capabilities);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return (struct VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
-    }
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu, surface, &capabilities), error
+    );
+    if (*error) return (VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
 
-    uint32_t formats_count;
-    result = vkGetPhysicalDeviceSurfaceFormatsKHR(gpu, surface, &formats_count, NULL);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return (struct VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
-    }
-    struct VkSurfaceFormatKHR surface_formats[formats_count];
-    result = vkGetPhysicalDeviceSurfaceFormatsKHR(gpu, surface, &formats_count, surface_formats);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return (struct VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
-    }
+    // enumerate available formats
+    uint32_t formats_count = 1;
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceFormatsKHR(gpu, surface, &formats_count, NULL), error
+    );
+    VkSurfaceFormatKHR* surface_formats;
+    VULKANO_INIT_MALLOC_ARRAY(surface_formats, formats_count);
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceFormatsKHR(
+            gpu, surface, &formats_count, surface_formats
+        ),
+        error
+    );
+    if (*error) return (VkSurfaceFormatKHR){.format = VK_FORMAT_UNDEFINED};
+
+    // select best format
     qsort(  // sorted worst->best
         surface_formats,
         formats_count,
-        sizeof(struct VkSurfaceFormatKHR),
+        sizeof(VkSurfaceFormatKHR),
         (compare_function)cmp
     );
-    struct VkSurfaceFormatKHR surface_format = surface_formats[formats_count - 1];
+    VkSurfaceFormatKHR surface_format = surface_formats[formats_count - 1];
     return surface_format;
 }
 
 static bool
-confirm_gpu_selection(VkSurfaceKHR surface, struct vulkano_gpu* gpu, uint32_t extension_count, const char** extensions)
+confirm_gpu_selection(
+    VkSurfaceKHR        surface,
+    struct vulkano_gpu* gpu,
+    uint32_t            extension_count,
+    const char**        extensions
+)
 {
-    VkResult result;
+    VulkanoError error = 0;
 
-    // ensure all required gpu extensions are supported
-    //
-    uint32_t supported_extensions_count;
-    result = vkEnumerateDeviceExtensionProperties(gpu->handle, NULL, &supported_extensions_count, NULL);
-    if (result != VK_SUCCESS) {
-        LOG("unable to enumerate gpu supported extensions\n");
+    // enumerate supported extensions
+    uint32_t supported_extensions_count = 1;
+    VULKANO_CHECK(
+        vkEnumerateDeviceExtensionProperties(
+            gpu->handle, NULL, &supported_extensions_count, NULL
+        ),
+        &error
+    );
+    VkExtensionProperties* supported_extensions;
+    VULKANO_INIT_MALLOC_ARRAY(supported_extensions, supported_extensions_count);
+    VULKANO_CHECK(
+        vkEnumerateDeviceExtensionProperties(
+            gpu->handle, NULL, &supported_extensions_count, supported_extensions
+        ),
+        &error
+    );
+    if (error) {
+        VULKANO_INFO("unable to enumerate gpu supported extensions\n");
         return false;
     }
-    VkExtensionProperties supported_extensions[supported_extensions_count];
-    result = vkEnumerateDeviceExtensionProperties(gpu->handle, NULL, &supported_extensions_count, supported_extensions);
-    if (result != VK_SUCCESS) {
-        LOG("unable to enumerate gpu supported extensions\n");
-        return false;
-    }
+
+    // ensure all extensions are supported
     qsort(
         supported_extensions,
         supported_extensions_count,
@@ -590,7 +613,12 @@ confirm_gpu_selection(VkSurfaceKHR surface, struct vulkano_gpu* gpu, uint32_t ex
     bool supported = true;
     for (size_t i = 0; i < extension_count; i++) {
         VkExtensionProperties required_extension = {0};
-        snprintf(required_extension.extensionName, sizeof(required_extension.extensionName), "%s", extensions[i]);
+        snprintf(
+            required_extension.extensionName,
+            sizeof(required_extension.extensionName),
+            "%s",
+            extensions[i]
+        );
         if (!bsearch(
                 &required_extension,
                 supported_extensions,
@@ -599,12 +627,13 @@ confirm_gpu_selection(VkSurfaceKHR surface, struct vulkano_gpu* gpu, uint32_t ex
                 (compare_function)compare_extension_names
             )) {
             supported = false;
-            LOGF("unsupported gpu extension: %s\n", extensions[i]);
+            VULKANO_ERRORF("unsupported gpu extension: %s\n", extensions[i]);
         }
     }
     if (!supported) {
-        LOGF(
-            "  GPU: [%s] failed requirements check: does not support all required "
+        VULKANO_ERRORF(
+            "  GPU: [%s] failed requirements check: does not support all "
+            "required "
             "extensions\n",
             gpu_name(gpu->handle)
         );
@@ -613,10 +642,10 @@ confirm_gpu_selection(VkSurfaceKHR surface, struct vulkano_gpu* gpu, uint32_t ex
 
     // TODO: make this configurable
     //
-    struct VkPhysicalDeviceFeatures supported_features;
+    VkPhysicalDeviceFeatures supported_features;
     vkGetPhysicalDeviceFeatures(gpu->handle, &supported_features);
     if (!supported_features.samplerAnisotropy) {
-        LOGF(
+        VULKANO_ERRORF(
             "  GPU: [%s] failed requirements check: does not support sampler "
             "anisotropy\n",
             gpu_name(gpu->handle)
@@ -624,16 +653,23 @@ confirm_gpu_selection(VkSurfaceKHR surface, struct vulkano_gpu* gpu, uint32_t ex
     }
 
     // search for queue family that supports graphics & presentation to our surface
-    //
     uint32_t queue_family_count;
     vkGetPhysicalDeviceQueueFamilyProperties(gpu->handle, &queue_family_count, NULL);
-    VkQueueFamilyProperties queue_family_properties[queue_family_count];
-    vkGetPhysicalDeviceQueueFamilyProperties(gpu->handle, &queue_family_count, queue_family_properties);
+    VkQueueFamilyProperties* queue_family_properties;
+    VULKANO_INIT_MALLOC_ARRAY(queue_family_properties, queue_family_count);
+
+    vkGetPhysicalDeviceQueueFamilyProperties(
+        gpu->handle, &queue_family_count, queue_family_properties
+    );
 
     for (uint32_t i = 0; i < queue_family_count; i++) {
         VkBool32 presentation_supported;
-        vkGetPhysicalDeviceSurfaceSupportKHR(gpu->handle, i, surface, &presentation_supported);
-        bool suitable_device = presentation_supported && queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT;
+        vkGetPhysicalDeviceSurfaceSupportKHR(
+            gpu->handle, i, surface, &presentation_supported
+        );
+        bool suitable_device =
+            presentation_supported &&
+            queue_family_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT;
 
         // if a suitable device is found fill selected queue family information
         // on the gpu struct and return true
@@ -645,17 +681,13 @@ confirm_gpu_selection(VkSurfaceKHR surface, struct vulkano_gpu* gpu, uint32_t ex
         }
     }
 
-    LOGF(
+    VULKANO_ERRORF(
         "  GPU: [%s] failed requirements check: does not support all required "
         "queues\n",
         gpu_name(gpu->handle)
     );
     return false;
 }
-
-const char* present_mode_to_string(VkPresentModeKHR mode);
-const char* color_format_to_string(VkFormat fmt);
-const char* color_space_to_string(VkColorSpaceKHR space);
 
 static void
 select_gpu(
@@ -665,36 +697,34 @@ select_gpu(
     surface_format_compare_function fmtcmp,
     uint32_t                        extensions_count,
     const char**                    extensions,
-    struct vulkano_error*           error
+    VulkanoError*                   error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    LOG("selecting gpu\n");
-    for (uint32_t i = 0; i < extensions_count; i++) LOGF("  required extension: %s\n", extensions[i]);
+    VULKANO_INFO("selecting gpu\n");
+    for (uint32_t i = 0; i < extensions_count; i++)
+        VULKANO_INFOF("  required extension: %s\n", extensions[i]);
 
-    VkResult result;
-
-    // start by enumerating all devices available to us
-    uint32_t device_count;
-    if ((result = vkEnumeratePhysicalDevices(vk->instance, &device_count, NULL)) != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    // enumerate available devices
+    uint32_t device_count = 0;
+    VULKANO_CHECK(vkEnumeratePhysicalDevices(vk->instance, &device_count, NULL), error);
     if (device_count == 0) {
-        error->code = VULKANO_ERROR_CODE_NO_GPU_AVAILABLE;
-        error->result = VK_ERROR_INITIALIZATION_FAILED;
-        vulkano_write_error_message(error, "vulkan found 0 gpus on system");
+        VULKANO_ERROR("no gpus visible to vulkan\n");
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
         return;
     }
-    VkPhysicalDevice devices[device_count];
-    if ((result = vkEnumeratePhysicalDevices(vk->instance, &device_count, devices)) != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VkPhysicalDevice* devices;
+    VULKANO_INIT_MALLOC_ARRAY(devices, device_count);
+    VULKANO_CHECK(
+        vkEnumeratePhysicalDevices(vk->instance, &device_count, devices), error
+    );
+    if (*error) return;
+
     qsort(devices, device_count, sizeof(VkPhysicalDevice), (compare_function)gpucmp);
-    LOG("  available gpus listed worst->best by configured ranking function:\n");
-    for (uint32_t i = 0; i < device_count; i++) LOGF("    %s\n", gpu_name(devices[i]));
+    VULKANO_INFO("  available gpus listed worst->best by configured ranking function:\n");
+    for (uint32_t i = 0; i < device_count; i++)
+        VULKANO_INFOF("    %s\n", gpu_name(devices[i]));
 
     // iterate devices from best->worst and return the first device that
     // meets the requirements
@@ -702,101 +732,107 @@ select_gpu(
     for (uint32_t i = 0; i < device_count; i++) {
         VkPhysicalDevice gpu = devices[device_count - 1 - i];
         vk->gpu.handle = gpu;
-        vk->gpu.configured_present_mode = select_present_mode(gpu, vk->surface, presentcmp, error);
-        if (error->code) return;
-        vk->gpu.configured_surface_format = select_surface_format(gpu, vk->surface, fmtcmp, error);
-        if (error->code) return;
+        vk->gpu.configured_present_mode =
+            select_present_mode(gpu, vk->surface, presentcmp, error);
+        vk->gpu.configured_surface_format =
+            select_surface_format(gpu, vk->surface, fmtcmp, error);
+        if (*error) return;
 
         if (confirm_gpu_selection(vk->surface, &vk->gpu, extensions_count, extensions)) {
-            LOGF("  configured present mode %s\n", present_mode_to_string(vk->gpu.configured_present_mode));
-            LOGF(
+            VULKANO_INFOF(
+                "  configured present mode %s\n",
+                present_mode_to_string(vk->gpu.configured_present_mode)
+            );
+            VULKANO_INFOF(
                 "  configured surface format with color format %s\n",
                 color_format_to_string(vk->gpu.configured_surface_format.format)
             );
-            LOGF(
+            VULKANO_INFOF(
                 "  configured surface format with color space %s\n",
                 color_space_to_string(vk->gpu.configured_surface_format.colorSpace)
             );
-            LOGF("selected gpu: %s\n\n", gpu_name(vk->gpu.handle));
+            VULKANO_INFOF("selected gpu: %s\n\n", gpu_name(vk->gpu.handle));
             return;
         }
     }
 
-    // set error if we made it through all devices without finding one which meets the
-    // configured requirements
-    error->code = VULKANO_ERROR_CODE_NO_SUITABLE_GPU_AVAILABLE;
-    vulkano_write_error_message(error, "no gpu available which meets configured requirements, see logs for more info");
+    *error = VULKANO_ERROR_CODE_NO_SUITABLE_GPU_AVAILABLE;
+    return;
 }
 
 static void
 create_device(
-    struct vulkano* vk, uint32_t gpu_extensions_count, const char** gpu_extensions, struct vulkano_error* error
+    struct vulkano* vk,
+    uint32_t        gpu_extensions_count,
+    const char**    gpu_extensions,
+    VulkanoError*   error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    struct VkPhysicalDeviceFeatures gpu_features = {.samplerAnisotropy = VK_TRUE};
+    VkPhysicalDeviceFeatures gpu_features = {.samplerAnisotropy = VK_TRUE};
 
-    float                          queue_priorities[] = {1.0};
-    struct VkDeviceQueueCreateInfo queue_create_infos[] = {
+    float                   queue_priorities[] = {1.0};
+    VkDeviceQueueCreateInfo queue_create_infos[] = {
         {
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueCount = 1,
             .pQueuePriorities = queue_priorities,
         },
     };
-    struct VkDeviceCreateInfo create_info = {
+    VkDeviceCreateInfo create_info = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = sizeof(queue_create_infos) / sizeof(queue_create_infos[0]),
+        .queueCreateInfoCount =
+            sizeof(queue_create_infos) / sizeof(queue_create_infos[0]),
         .pQueueCreateInfos = queue_create_infos,
         .enabledExtensionCount = gpu_extensions_count,
         .ppEnabledExtensionNames = gpu_extensions,
         .pEnabledFeatures = &gpu_features,
     };
 
-    VkResult result = vkCreateDevice(vk->gpu.handle, &create_info, NULL, &vk->device);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VULKANO_CHECK(vkCreateDevice(vk->gpu.handle, &create_info, NULL, &vk->device), error);
+    if (*error) return;
 
-    vkGetDeviceQueue(vk->device, vk->gpu.graphics_queue_family, 0, &vk->gpu.graphics_queue);
-    vk->gpu.single_use_command_pool = vulkano_create_command_pool(
-        vk, (struct VkCommandPoolCreateInfo){.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}, error
+    vkGetDeviceQueue(
+        vk->device, vk->gpu.graphics_queue_family, 0, &vk->gpu.graphics_queue
     );
-    if (error->code) return;
+    vk->gpu.single_use_command_pool = vulkano_create_command_pool(
+        vk,
+        (VkCommandPoolCreateInfo
+        ){.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT},
+        error
+    );
+    if (*error) return;
 }
 
-int default_gpu_compare(VkPhysicalDevice*, VkPhysicalDevice*);
-int default_surface_format_compare(VkSurfaceFormatKHR*, VkSurfaceFormatKHR*);
-int default_present_modes_compare(VkPresentModeKHR*, VkPresentModeKHR*);
-
-#define DEFAULT0(value, default) (value) = ((value)) ? (value) : (default)
-
 struct vulkano
-vulkano_create(struct vulkano_config config, struct vulkano_error* error)
+vulkano_create(struct vulkano_config config, VulkanoError* error)
 {
     struct vulkano vk = {0};
     const char*    surface_error = NULL;
 
     if (!config.surface_creation) {
-        error->code = VULKANO_ERROR_CODE_BAD_CONFIGURATION;
-        vulkano_write_error_message(error, "vulkano_config.surface_creation must be specified");
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR("vulkano_config.surface_creation must be specified");
         return vk;
     }
     if (!config.query_window_size) {
-        error->code = VULKANO_ERROR_CODE_BAD_CONFIGURATION;
-        vulkano_write_error_message(error, "vulkano_config.query_window_size must be specified");
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR("vulkano_config.query_window_size must be specified");
         return vk;
     }
+
+    vk.query_size = config.query_window_size;
 
     DEFAULT0(config.gpu_compare, default_gpu_compare);
     DEFAULT0(config.format_compare, default_surface_format_compare);
     DEFAULT0(config.present_compare, default_present_modes_compare);
 
     // various default configurations availble through preprocessor
-    static const char* DEFAULT_INSTANCE_VALIDATION_LAYERS[] = {"VK_LAYER_KHRONOS_validation"};
-    static const char* DEFAULT_GRAPHICS_GPU_EXTENSIONS[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    static const char* DEFAULT_INSTANCE_VALIDATION_LAYERS[] = {
+        "VK_LAYER_KHRONOS_validation"};
+    static const char* DEFAULT_GRAPHICS_GPU_EXTENSIONS[] = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
     static struct string_array LIBRARY_REQUIRED_GPU_EXTENSIONS = {
         .count = 0,
@@ -812,11 +848,13 @@ vulkano_create(struct vulkano_config config, struct vulkano_error* error)
     };
 #ifdef VULKANO_ENABLE_DEFAULT_VALIDATION_LAYERS
     LIBRARY_REQUIRED_VALIDATION_LAYERS.data = DEFAULT_INSTANCE_VALIDATION_LAYERS;
-    LIBRARY_REQUIRED_VALIDATION_LAYERS.count = sizeof(DEFAULT_INSTANCE_VALIDATION_LAYERS) / sizeof(const char*);
+    LIBRARY_REQUIRED_VALIDATION_LAYERS.count =
+        sizeof(DEFAULT_INSTANCE_VALIDATION_LAYERS) / sizeof(const char*);
 #endif
 #ifdef VULKANO_ENABLE_DEFAULT_GRAPHICS_EXTENSIONS
     LIBRARY_REQUIRED_GPU_EXTENSIONS.data = DEFAULT_GRAPHICS_GPU_EXTENSIONS;
-    LIBRARY_REQUIRED_GPU_EXTENSIONS.count = sizeof(DEFAULT_GRAPHICS_GPU_EXTENSIONS) / sizeof(const char*);
+    LIBRARY_REQUIRED_GPU_EXTENSIONS.count =
+        sizeof(DEFAULT_GRAPHICS_GPU_EXTENSIONS) / sizeof(const char*);
 #endif
 
     // combine defaults (if requested) and user requested configuration into
@@ -834,23 +872,27 @@ vulkano_create(struct vulkano_config config, struct vulkano_error* error)
         .count = config.gpu_extensions_count,
         .data = config.gpu_extensions,
     };
-    struct string_array required_validation_layers =
-        combine_string_arrays_unique(LIBRARY_REQUIRED_VALIDATION_LAYERS, user_required_validation_layers, error);
-    struct string_array required_instance_extensions =
-        combine_string_arrays_unique(LIBRARY_REQUIRED_INSTANCE_EXTENSIONS, user_required_instance_extensions, error);
-    struct string_array required_gpu_extensions =
-        combine_string_arrays_unique(LIBRARY_REQUIRED_GPU_EXTENSIONS, user_required_gpu_extensions, error);
-    if (error->code) goto cleanup;
+    struct string_array required_validation_layers = combine_string_arrays_unique(
+        LIBRARY_REQUIRED_VALIDATION_LAYERS, user_required_validation_layers
+    );
+    struct string_array required_instance_extensions = combine_string_arrays_unique(
+        LIBRARY_REQUIRED_INSTANCE_EXTENSIONS, user_required_instance_extensions
+    );
+    struct string_array required_gpu_extensions = combine_string_arrays_unique(
+        LIBRARY_REQUIRED_GPU_EXTENSIONS, user_required_gpu_extensions
+    );
+    if (*error) goto cleanup;
 
-    LOG("INITIALIZING VULKAN\n\n");
-    LOG("required instance extensions:\n");
+    VULKANO_INFO("INITIALIZING VULKAN\n\n");
+    VULKANO_INFO("required instance extensions:\n");
     for (uint32_t i = 0; i < required_instance_extensions.count; i++)
-        LOGF("  %s\n", required_instance_extensions.data[i]);
-    LOG("\n");
+        VULKANO_INFOF("  %s\n", required_instance_extensions.data[i]);
+    VULKANO_INFO("\n");
 
-    LOG("required instance validation layers:\n");
-    for (uint32_t i = 0; i < required_validation_layers.count; i++) LOGF("  %s\n", required_validation_layers.data[i]);
-    LOG("\n");
+    VULKANO_INFO("required instance validation layers:\n");
+    for (uint32_t i = 0; i < required_validation_layers.count; i++)
+        VULKANO_INFOF("  %s\n", required_validation_layers.data[i]);
+    VULKANO_INFO("\n");
 
     create_instance(
         &vk,
@@ -860,19 +902,18 @@ vulkano_create(struct vulkano_config config, struct vulkano_error* error)
         required_instance_extensions.data,
         error
     );
-    if (error->code) goto cleanup;
+    if (*error) goto cleanup;
 
     // create surface
     // native surface creation not currently implemented
+    // TODO: implement native windows?
     surface_error = config.surface_creation(vk.instance, &vk.surface);
     if (surface_error) {
-        error->code = VULKANO_ERROR_CODE_SURFACE_CREATION_FAILED;
-        error->result = VK_ERROR_UNKNOWN;
-        vulkano_write_error_message(error, surface_error);
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR(surface_error);
         goto cleanup;
     }
 
-    // select a gpu
     select_gpu(
         &vk,
         config.gpu_compare,
@@ -882,17 +923,14 @@ vulkano_create(struct vulkano_config config, struct vulkano_error* error)
         required_gpu_extensions.data,
         error
     );
-    if (error->code) goto cleanup;
-
-    // create logical device with selected gpu
-    create_device(&vk, required_gpu_extensions.count, required_gpu_extensions.data, error);
-    if (error->code) goto cleanup;
+    create_device(
+        &vk, required_gpu_extensions.count, required_gpu_extensions.data, error
+    );
+    if (*error) goto cleanup;
 
 cleanup:
-    free(required_gpu_extensions.data);
-    free(required_validation_layers.data);
-    free(required_instance_extensions.data);
-    if (error->code) vulkano_destroy(&vk);
+    free_init_allocations();
+    if (*error) vulkano_destroy(&vk);
     return vk;
 }
 
@@ -905,7 +943,9 @@ destroy_per_frame_state(struct vulkano* vk)
     for (uint32_t i = 0; i < vk->swapchain.image_count; i++) {
         vkDestroyCommandPool(vk->device, vk->frame_state[i].command_pool, NULL);
         vkDestroySemaphore(vk->device, vk->frame_state[i].image_ready_for_use, NULL);
-        vkDestroySemaphore(vk->device, vk->frame_state[i].rendering_commands_complete, NULL);
+        vkDestroySemaphore(
+            vk->device, vk->frame_state[i].rendering_commands_complete, NULL
+        );
         vkDestroyFence(vk->device, vk->frame_state[i].presentation_complete, NULL);
     }
     free(vk->frame_state);
@@ -913,32 +953,37 @@ destroy_per_frame_state(struct vulkano* vk)
 }
 
 static void
-create_per_frame_state(struct vulkano* vk, struct vulkano_error* error)
+create_per_frame_state(struct vulkano* vk, VulkanoError* error)
 {
-    if (error->code) return;
+    if (*error) return;
 
-    assert(vk->swapchain.image_count);
-
+    assert(vk->swapchain.image_count && "swapchain needs to be setup before this call");
     destroy_per_frame_state(vk);
 
     vk->frame_state = calloc(vk->swapchain.image_count, sizeof *vk->frame_state);
     if (!vk->frame_state) {
-        vulkano_out_of_memory(error, VK_ERROR_OUT_OF_HOST_MEMORY);
+        *error = VULKANO_ERROR_CODE_OUT_OF_MEMORY;
+        VULKANO_ERROR("out of memory\n");
         return;
     }
 
     for (uint32_t i = 0; i < vk->swapchain.image_count; i++) {
-        vk->frame_state[i].image_ready_for_use = vulkano_create_semaphore(vk, (struct VkSemaphoreCreateInfo){0}, error);
+        vk->frame_state[i].image_ready_for_use =
+            vulkano_create_semaphore(vk, (VkSemaphoreCreateInfo){0}, error);
         vk->frame_state[i].rendering_commands_complete =
-            vulkano_create_semaphore(vk, (struct VkSemaphoreCreateInfo){0}, error);
-        vk->frame_state[i].presentation_complete =
-            vulkano_create_fence(vk, (struct VkFenceCreateInfo){.flags = VK_FENCE_CREATE_SIGNALED_BIT}, error);
+            vulkano_create_semaphore(vk, (VkSemaphoreCreateInfo){0}, error);
+        vk->frame_state[i].presentation_complete = vulkano_create_fence(
+            vk, (VkFenceCreateInfo){.flags = VK_FENCE_CREATE_SIGNALED_BIT}, error
+        );
         vk->frame_state[i].command_pool = vulkano_create_command_pool(
-            vk, (struct VkCommandPoolCreateInfo){.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}, error
+            vk,
+            (VkCommandPoolCreateInfo
+            ){.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT},
+            error
         );
         vulkano_allocate_command_buffers(
             vk,
-            (struct VkCommandBufferAllocateInfo){
+            (VkCommandBufferAllocateInfo){
                 .commandPool = vk->frame_state[i].command_pool,
                 .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                 .commandBufferCount = 1,
@@ -946,7 +991,7 @@ create_per_frame_state(struct vulkano* vk, struct vulkano_error* error)
             &vk->frame_state[i].render_command,
             error
         );
-        if (error->code) {
+        if (*error) {
             destroy_per_frame_state(vk);
             return;
         }
@@ -958,24 +1003,24 @@ destroy_swapchain(struct vulkano* vk)
 {
     if (!vk->device) return;
     vkDeviceWaitIdle(vk->device);
-
     for (uint32_t i = 0; i < vk->swapchain.image_count; i++) {
-        if (vk->swapchain.image_views) vkDestroyImageView(vk->device, vk->swapchain.image_views[i], NULL);
-        if (vk->swapchain.depth_image_views) vkDestroyImageView(vk->device, vk->swapchain.depth_image_views[i], NULL);
-        if (vk->swapchain.depth_images) vulkano_image_destroy(vk, &vk->swapchain.depth_images[i]);
-        if (vk->swapchain.framebuffers) vkDestroyFramebuffer(vk->device, vk->swapchain.framebuffers[i], NULL);
+        if (vk->swapchain.image_views)
+            vkDestroyImageView(vk->device, vk->swapchain.image_views[i], NULL);
+        if (vk->swapchain.depth_image_views)
+            vkDestroyImageView(vk->device, vk->swapchain.depth_image_views[i], NULL);
+        if (vk->swapchain.depth_images)
+            vulkano_image_destroy(vk, &vk->swapchain.depth_images[i]);
+        if (vk->swapchain.framebuffers)
+            vkDestroyFramebuffer(vk->device, vk->swapchain.framebuffers[i], NULL);
     }
-
     free(vk->swapchain.image_views);
     free(vk->swapchain.depth_image_views);
     free(vk->swapchain.depth_images);
     free(vk->swapchain.framebuffers);
-
     vk->swapchain.image_views = NULL;
     vk->swapchain.depth_image_views = NULL;
     vk->swapchain.depth_images = NULL;
     vk->swapchain.framebuffers = NULL;
-
     vkDestroySwapchainKHR(vk->device, vk->swapchain.handle, NULL);
     vk->swapchain.handle = VK_NULL_HANDLE;
 }
@@ -984,227 +1029,194 @@ void
 vulkano_destroy(struct vulkano* vk)
 {
     if (vk->device) vkDeviceWaitIdle(vk->device);
-
     destroy_per_frame_state(vk);
     destroy_swapchain(vk);
-
     vkDestroyCommandPool(vk->device, vk->gpu.single_use_command_pool, NULL);
-
     if (vk->device) vkDestroyDevice(vk->device, NULL);
     if (vk->surface) vkDestroySurfaceKHR(vk->instance, vk->surface, NULL);
     if (vk->instance) vkDestroyInstance(vk->instance, NULL);
-
     *vk = (struct vulkano){0};
 }
 
 VkCommandPool
-vulkano_create_command_pool(struct vulkano* vk, struct VkCommandPoolCreateInfo info, struct vulkano_error* error)
+vulkano_create_command_pool(
+    struct vulkano* vk, VkCommandPoolCreateInfo info, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-
-    VkCommandPool pool;
-    VkResult      result = vkCreateCommandPool(vk->device, &info, NULL, &pool);
-    if (result != VK_SUCCESS) {
-        vulkano_out_of_memory(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateCommandPool(vk->device, &info, NULL, &pool), error);
     return pool;
 }
 
 VkImageView
-vulkano_create_image_view(struct vulkano* vk, struct VkImageViewCreateInfo info, struct vulkano_error* error)
+vulkano_create_image_view(
+    struct vulkano* vk, VkImageViewCreateInfo info, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
     DEFAULT0(info.viewType, VK_IMAGE_VIEW_TYPE_2D);
     DEFAULT0(info.format, vk->gpu.configured_surface_format.format);
     DEFAULT0(info.subresourceRange.aspectMask, VK_IMAGE_ASPECT_COLOR_BIT);
     DEFAULT0(info.subresourceRange.levelCount, 1);
     DEFAULT0(info.subresourceRange.layerCount, 1);
-
-    VkImageView image_view;
-    VkResult    result = vkCreateImageView(vk->device, &info, NULL, &image_view);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
+    VkImageView image_view = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateImageView(vk->device, &info, NULL, &image_view), error);
     return image_view;
 }
 
 VkSampler
-vulkano_create_sampler(struct vulkano* vk, struct VkSamplerCreateInfo info, struct vulkano_error* error)
+vulkano_create_sampler(struct vulkano* vk, VkSamplerCreateInfo info, VulkanoError* error)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
-    VkSampler sampler;
-    VkResult  result = vkCreateSampler(vk->device, &info, NULL, &sampler);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
+    VkSampler sampler = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateSampler(vk->device, &info, NULL, &sampler), error);
     return sampler;
 }
 
 VkSemaphore
-vulkano_create_semaphore(struct vulkano* vk, struct VkSemaphoreCreateInfo info, struct vulkano_error* error)
+vulkano_create_semaphore(
+    struct vulkano* vk, VkSemaphoreCreateInfo info, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
-    VkSemaphore semaphore;
-    VkResult    result = vkCreateSemaphore(vk->device, &info, NULL, &semaphore);
-    if (result != VK_SUCCESS) {
-        vulkano_out_of_memory(error, result);
-        return VK_NULL_HANDLE;
-    }
+    VkSemaphore semaphore = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateSemaphore(vk->device, &info, NULL, &semaphore), error);
     return semaphore;
 }
 
 VkFence
-vulkano_create_fence(struct vulkano* vk, struct VkFenceCreateInfo info, struct vulkano_error* error)
+vulkano_create_fence(struct vulkano* vk, VkFenceCreateInfo info, VulkanoError* error)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
-    VkFence  fence;
-    VkResult result = vkCreateFence(vk->device, &info, NULL, &fence);
-    if (result != VK_SUCCESS) {
-        vulkano_out_of_memory(error, result);
-        return VK_NULL_HANDLE;
-    }
+    VkFence fence = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateFence(vk->device, &info, NULL, &fence), error);
     return fence;
 }
 
 void
 vulkano_allocate_command_buffers(
-    struct vulkano*                    vk,
-    struct VkCommandBufferAllocateInfo info,
-    VkCommandBuffer*                   command_buffers,
-    struct vulkano_error*              error
+    struct vulkano*             vk,
+    VkCommandBufferAllocateInfo info,
+    VkCommandBuffer*            command_buffers,
+    VulkanoError*               error
 )
 {
-    if (error->code) return;
-
+    if (*error) return;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
     DEFAULT0(info.commandBufferCount, 1);
+    VULKANO_CHECK(vkAllocateCommandBuffers(vk->device, &info, command_buffers), error);
+}
 
-    VkResult result = vkAllocateCommandBuffers(vk->device, &info, command_buffers);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+void
+vulkano_allocate_descriptor_sets(
+    struct vulkano*             vk,
+    VkDescriptorSetAllocateInfo info,
+    VkDescriptorSet             sets[],
+    VulkanoError*               error
+)
+{
+    if (*error) return;
+    DEFAULT0(info.sType, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
+    VULKANO_CHECK(vkAllocateDescriptorSets(vk->device, &info, sets), error);
 }
 
 VkRenderPass
-vulkano_create_render_pass(struct vulkano* vk, struct VkRenderPassCreateInfo info, struct vulkano_error* error)
+vulkano_create_render_pass(
+    struct vulkano* vk, VkRenderPassCreateInfo info, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
+    if (*error) return VK_NULL_HANDLE;
 
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
 
     // if attachment format is undefined use swapchain format instead
     for (uint32_t attachment = 0; attachment < info.attachmentCount; attachment++) {
-        VkAttachmentDescription* desc = (VkAttachmentDescription*)info.pAttachments + attachment;
+        VkAttachmentDescription* desc =
+            (VkAttachmentDescription*)info.pAttachments + attachment;
         DEFAULT0(desc->format, vk->gpu.configured_surface_format.format);
     }
 
-    VkRenderPass render_pass;
-    VkResult     result = vkCreateRenderPass(vk->device, &info, NULL, &render_pass);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkRenderPass render_pass = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateRenderPass(vk->device, &info, NULL, &render_pass), error);
     return render_pass;
 }
 
 VkDescriptorSetLayout
 vulkano_create_descriptor_set_layout(
-    struct vulkano* vk, struct VkDescriptorSetLayoutCreateInfo info, struct vulkano_error* error
+    struct vulkano* vk, VkDescriptorSetLayoutCreateInfo info, VulkanoError* error
 )
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
-    VkDescriptorSetLayout layout;
-    VkResult              result = vkCreateDescriptorSetLayout(vk->device, &info, NULL, &layout);
-
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateDescriptorSetLayout(vk->device, &info, NULL, &layout), error);
     return layout;
 }
 
 VkPipelineLayout
-vulkano_create_pipeline_layout(struct vulkano* vk, struct VkPipelineLayoutCreateInfo info, struct vulkano_error* error)
+vulkano_create_pipeline_layout(
+    struct vulkano* vk, VkPipelineLayoutCreateInfo info, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
-
+    if (*error) return VK_NULL_HANDLE;
     DEFAULT0(info.sType, VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
-
-    VkPipelineLayout layout;
-    VkResult         result = vkCreatePipelineLayout(vk->device, &info, NULL, &layout);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreatePipelineLayout(vk->device, &info, NULL, &layout), error);
     return layout;
 }
 
 VkShaderModule
-vulkano_create_shader_module(struct vulkano* vk, struct vulkano_data data, struct vulkano_error* error)
+vulkano_create_shader_module(
+    struct vulkano* vk, struct vulkano_data data, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
-    struct VkShaderModuleCreateInfo info = {
+    if (*error) return VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo info = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = data.length,
-        .pCode = (uint32_t*)data.bytes,
+        .codeSize = data.size,
+        .pCode = (uint32_t*)data.data,
     };
-
-    VkShaderModule module;
-    VkResult       result = vkCreateShaderModule(vk->device, &info, NULL, &module);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkShaderModule module = VK_NULL_HANDLE;
+    VULKANO_CHECK(vkCreateShaderModule(vk->device, &info, NULL, &module), error);
     return module;
 }
 
 VkPipeline
 vulkano_create_graphics_pipeline(
-    struct vulkano* vk, struct graphics_pipeline_create_info info, struct vulkano_error* error
+    struct vulkano* vk, struct vulkano_pipeline_config info, VulkanoError* error
 )
 {
-    if (error->code) return VK_NULL_HANDLE;
+    if (*error) return VK_NULL_HANDLE;
 
     for (size_t i = 0; i < info.stage_count; i++) {
         info.stages[i].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         DEFAULT0(info.stages[i].pName, "main");
     }
-    info.vertex_input_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    info.input_assembly_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    info.tessellation_state.sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+    info.vertex_input_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    info.input_assembly_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    info.tessellation_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
     info.viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    info.rasterization_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    info.multisample_state.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    info.depth_stencil_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    info.color_blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    info.rasterization_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    info.multisample_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    info.depth_stencil_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    info.color_blend_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     info.dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 
     DEFAULT0(info.multisample_state.rasterizationSamples, VK_SAMPLE_COUNT_1_BIT);
-
-    struct VkGraphicsPipelineCreateInfo processed_info = {
+    VkGraphicsPipelineCreateInfo processed_info = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .flags = info.flags,
         .stageCount = info.stage_count,
@@ -1224,58 +1236,66 @@ vulkano_create_graphics_pipeline(
         .basePipelineHandle = info.base_pipeline_handle,
         .basePipelineIndex = info.base_pipeline_index,
     };
-
-    VkPipeline pipeline;
-    VkResult   result = vkCreateGraphicsPipelines(vk->device, NULL, 1, &processed_info, NULL, &pipeline);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VULKANO_CHECK(
+        vkCreateGraphicsPipelines(vk->device, NULL, 1, &processed_info, NULL, &pipeline),
+        error
+    );
     return pipeline;
 }
 
 VkDescriptorPool
-vulkano_create_descriptor_pool(struct vulkano* vk, struct VkDescriptorPoolCreateInfo info, struct vulkano_error* error)
+vulkano_create_descriptor_pool(
+    struct vulkano* vk, VkDescriptorPoolCreateInfo info, VulkanoError* error
+)
 {
-    if (error->code) return VK_NULL_HANDLE;
-
+    if (*error) return VK_NULL_HANDLE;
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-
-    VkDescriptorPool pool;
-    VkResult         result = vkCreateDescriptorPool(vk->device, &info, NULL, &pool);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return VK_NULL_HANDLE;
-    }
-
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    ;
+    VULKANO_CHECK(vkCreateDescriptorPool(vk->device, &info, NULL, &pool), error);
     return pool;
 }
 
 static void
-create_swapchain(struct vulkano* vk, struct vulkano_error* error)
+create_swapchain(struct vulkano* vk, VulkanoError* error)
 {
-    if (error->code) return;
-
+    if (*error) return;
     destroy_swapchain(vk);
 
-    VkSurfaceCapabilitiesKHR capabilities;
-    VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk->gpu.handle, vk->surface, &capabilities);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-    struct VkExtent2D extent = capabilities.currentExtent;
+    VkSurfaceCapabilitiesKHR capabilities = {0};
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            vk->gpu.handle, vk->surface, &capabilities
+        ),
+        error
+    );
+    if (*error) return;
+    VkExtent2D extent = capabilities.currentExtent;
     if (extent.width == 0xFFFFFFFF) {
         uint32_t width, height;
         vk->query_size(&width, &height);
-        extent.width = CLAMP(capabilities.minImageExtent.width, capabilities.maxImageExtent.width, width);
-        extent.height = CLAMP(capabilities.minImageExtent.height, capabilities.maxImageExtent.height, height);
+        extent.width = VULKANO_CLAMP(
+            capabilities.minImageExtent.width, capabilities.maxImageExtent.width, width
+        );
+        extent.height = VULKANO_CLAMP(
+            capabilities.minImageExtent.height, capabilities.maxImageExtent.height, height
+        );
     }
-    vk->swapchain.extent = extent;
-    LOGF("creating swapchain with extent (%u, %u)\n", vk->swapchain.extent.width, vk->swapchain.extent.height);
 
-    struct VkSwapchainCreateInfoKHR swapchain_info = {
+    if (extent.width == 0 || extent.height == 0) {
+        *error = VULKANO_ERROR_CODE_MINIMIZED;
+        return;
+    }
+
+    vk->swapchain.extent = extent;
+    VULKANO_INFOF(
+        "creating swapchain with extent (%u, %u)\n",
+        vk->swapchain.extent.width,
+        vk->swapchain.extent.height
+    );
+
+    VkSwapchainCreateInfoKHR swapchain_info = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = vk->surface,
         .minImageCount = vk->swapchain.image_count,
@@ -1290,36 +1310,42 @@ create_swapchain(struct vulkano* vk, struct vulkano_error* error)
         .presentMode = vk->gpu.configured_present_mode,
         .clipped = VK_TRUE,
     };
-    result = vkCreateSwapchainKHR(vk->device, &swapchain_info, NULL, &vk->swapchain.handle);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VULKANO_CHECK(
+        vkCreateSwapchainKHR(vk->device, &swapchain_info, NULL, &vk->swapchain.handle),
+        error
+    );
+    if (*error) return;
 
-    VkImage images[vk->swapchain.image_count];
-    result = vkGetSwapchainImagesKHR(vk->device, vk->swapchain.handle, &vk->swapchain.image_count, images);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        destroy_swapchain(vk);
-        return;
-    }
+    VkImage* images;
+    VULKANO_INIT_MALLOC_ARRAY(images, vk->swapchain.image_count);
+    VULKANO_CHECK(
+        vkGetSwapchainImagesKHR(
+            vk->device, vk->swapchain.handle, &vk->swapchain.image_count, images
+        ),
+        error
+    );
+    if (*error) return;
 
-    vk->swapchain.image_views = calloc(vk->swapchain.image_count, sizeof *vk->swapchain.image_views);
-    vk->swapchain.depth_images = calloc(vk->swapchain.image_count, sizeof *vk->swapchain.depth_images);
-    vk->swapchain.depth_image_views = calloc(vk->swapchain.image_count, sizeof *vk->swapchain.depth_image_views);
-    vk->swapchain.framebuffers = calloc(vk->swapchain.image_count, sizeof *vk->swapchain.framebuffers);
+    vk->swapchain.image_views =
+        calloc(vk->swapchain.image_count, sizeof *vk->swapchain.image_views);
+    vk->swapchain.depth_images =
+        calloc(vk->swapchain.image_count, sizeof *vk->swapchain.depth_images);
+    vk->swapchain.depth_image_views =
+        calloc(vk->swapchain.image_count, sizeof *vk->swapchain.depth_image_views);
+    vk->swapchain.framebuffers =
+        calloc(vk->swapchain.image_count, sizeof *vk->swapchain.framebuffers);
 
-    if (!(vk->swapchain.image_views && vk->swapchain.depth_images && vk->swapchain.depth_image_views &&
-          vk->swapchain.framebuffers)) {
-        vulkano_out_of_memory(error, VK_ERROR_OUT_OF_HOST_MEMORY);
-        destroy_swapchain(vk);
+    if (!(vk->swapchain.image_views && vk->swapchain.depth_images &&
+          vk->swapchain.depth_image_views && vk->swapchain.framebuffers)) {
+        *error = VULKANO_ERROR_CODE_OUT_OF_MEMORY;
+        VULKANO_ERROR("out of memory");
         return;
     }
 
     for (uint32_t i = 0; i < vk->swapchain.image_count; i++) {
         vk->swapchain.image_views[i] = vulkano_create_image_view(
             vk,
-            (struct VkImageViewCreateInfo){
+            (VkImageViewCreateInfo){
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .image = images[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
@@ -1334,7 +1360,7 @@ create_swapchain(struct vulkano* vk, struct vulkano_error* error)
         );
         vk->swapchain.depth_images[i] = vulkano_image_create(
             vk,
-            (struct VkImageCreateInfo){
+            (VkImageCreateInfo){
                 .format = VULKANO_DEPTH_FORMAT,
                 .extent = {vk->swapchain.extent.width, vk->swapchain.extent.height, 1},
                 .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -1346,19 +1372,20 @@ create_swapchain(struct vulkano* vk, struct vulkano_error* error)
         );
         vk->swapchain.depth_image_views[i] = vulkano_create_image_view(
             vk,
-            (struct VkImageViewCreateInfo){
+            (VkImageViewCreateInfo){
                 .image = vk->swapchain.depth_images[i].handle,
                 .format = VULKANO_DEPTH_FORMAT,
                 .subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
             },
             error
         );
-        if (error->code) {
+        if (*error) {
             destroy_swapchain(vk);
             return;
         }
 
-        VkImageView             attachments[] = {vk->swapchain.image_views[i], vk->swapchain.depth_image_views[i]};
+        VkImageView attachments[] = {
+            vk->swapchain.image_views[i], vk->swapchain.depth_image_views[i]};
         VkFramebufferCreateInfo framebuffer_info = {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .renderPass = vk->swapchain.render_pass,
@@ -1368,38 +1395,49 @@ create_swapchain(struct vulkano* vk, struct vulkano_error* error)
             .height = vk->swapchain.extent.height,
             .layers = 1,
         };
-        result = vkCreateFramebuffer(vk->device, &framebuffer_info, NULL, &vk->swapchain.framebuffers[i]);
-        if (result != VK_SUCCESS) {
-            vulkano_fatal_error(error, result);
+        VULKANO_CHECK(
+            vkCreateFramebuffer(
+                vk->device, &framebuffer_info, NULL, &vk->swapchain.framebuffers[i]
+            ),
+            error
+        );
+        if (*error) {
             destroy_swapchain(vk);
             return;
         }
-        if (error->code) return;
     }
 }
 
 void
 vulkano_configure_swapchain(
-    struct vulkano* vk, VkRenderPass render_pass, uint32_t image_count, struct vulkano_error* error
+    struct vulkano* vk,
+    VkRenderPass    render_pass,
+    uint32_t        image_count,
+    VulkanoError*   error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
     vk->swapchain.render_pass = render_pass;
     vk->swapchain.image_count = image_count;
 
-    VkSurfaceCapabilitiesKHR capabilities;
-    VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk->gpu.handle, vk->surface, &capabilities);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VkSurfaceCapabilitiesKHR capabilities = {0};
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            vk->gpu.handle, vk->surface, &capabilities
+        ),
+        error
+    );
+    if (*error) return;
 
-    if (image_count < capabilities.minImageCount || image_count > capabilities.maxImageCount) {
-        error->code = VULKANO_ERROR_CODE_INVALID_SWAPCHAIN_IMAGE_COUNT;
-        error->result = VK_ERROR_UNKNOWN;
-        vulkano_write_error_message(error, "swapchain image count not supported");
-        LOGF("min_image_count: %u max_image_count %u\n", capabilities.minImageCount, capabilities.maxImageCount);
+    if (image_count < capabilities.minImageCount ||
+        image_count > capabilities.maxImageCount) {
+        *error = VULKANO_ERROR_CODE_INVALID_SWAPCHAIN_IMAGE_COUNT;
+        VULKANO_ERRORF(
+            "min_image_count: %u max_image_count %u\n",
+            capabilities.minImageCount,
+            capabilities.maxImageCount
+        );
         return;
     }
 
@@ -1409,43 +1447,38 @@ vulkano_configure_swapchain(
 }
 
 VkCommandBuffer
-vulkano_acquire_single_use_command_buffer(struct vulkano* vk, struct vulkano_error* error)
+vulkano_acquire_single_use_command_buffer(struct vulkano* vk, VulkanoError* error)
 {
-    if (error->code) return VK_NULL_HANDLE;
+    if (*error) return VK_NULL_HANDLE;
 
-    VkCommandBuffer             cmd;
+    VkCommandBuffer             cmd = VK_NULL_HANDLE;
     VkCommandBufferAllocateInfo allocation_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool = vk->gpu.single_use_command_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
-    VkResult result = vkAllocateCommandBuffers(vk->device, &allocation_info, &cmd);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return cmd;
-    }
+    VULKANO_CHECK(vkAllocateCommandBuffers(vk->device, &allocation_info, &cmd), error);
+    if (*error) return cmd;
 
     VkCommandBufferBeginInfo begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
-    result = vkBeginCommandBuffer(cmd, &begin_info);
-    if (result != VK_SUCCESS) {
+    VULKANO_CHECK(vkBeginCommandBuffer(cmd, &begin_info), error);
+    if (*error) {
         vkFreeCommandBuffers(vk->device, vk->gpu.single_use_command_pool, 1, &cmd);
-        vulkano_fatal_error(error, result);
         return VK_NULL_HANDLE;
     }
-
     return cmd;
 }
 
 void
-vulkano_submit_single_use_command_buffer(struct vulkano* vk, VkCommandBuffer cmd, struct vulkano_error* error)
+vulkano_submit_single_use_command_buffer(
+    struct vulkano* vk, VkCommandBuffer cmd, VulkanoError* error
+)
 {
-    if (error->code) return;
-
-    VkResult result;
+    if (*error) return;
 
     static const VkFenceCreateInfo fence_info = {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -1458,73 +1491,85 @@ vulkano_submit_single_use_command_buffer(struct vulkano* vk, VkCommandBuffer cmd
         .pCommandBuffers = &cmd,
     };
 
-    result = vkCreateFence(vk->device, &fence_info, NULL, &fence);
-    if (result != VK_SUCCESS) goto cleanup;
-
-    result = vkEndCommandBuffer(cmd);
-    if (result != VK_SUCCESS) goto cleanup;
-
-    result = vkQueueSubmit(vk->gpu.graphics_queue, 1, &submit, fence);
-    if (result != VK_SUCCESS) goto cleanup;
-
-    result = vkWaitForFences(vk->device, 1, &fence, VK_TRUE, VULKANO_TIMEOUT);
-    if (result != VK_SUCCESS) goto cleanup;
+    VULKANO_CHECK(vkCreateFence(vk->device, &fence_info, NULL, &fence), error);
+    VULKANO_CHECK(vkEndCommandBuffer(cmd), error);
+    VULKANO_CHECK(vkQueueSubmit(vk->gpu.graphics_queue, 1, &submit, fence), error);
+    VULKANO_CHECK(
+        vkWaitForFences(vk->device, 1, &fence, VK_TRUE, VULKANO_TIMEOUT), error
+    );
+    if (*error) goto cleanup;
 
 cleanup:
     vkFreeCommandBuffers(vk->device, vk->gpu.single_use_command_pool, 1, &cmd);
     if (fence) vkDestroyFence(vk->device, fence, NULL);
+}
 
-    if (result == VK_SUCCESS) return;
+static bool
+vulkano_resized(struct vulkano* vk, VulkanoError* error)
+{
+    VkSurfaceCapabilitiesKHR capabilities = {0};
+    VULKANO_CHECK(
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            vk->gpu.handle, vk->surface, &capabilities
+        ),
+        error
+    );
+    if (*error) return true;
 
-    if (result == VK_TIMEOUT) {
-        error->code = VULKANO_ERROR_CODE_TIMEOUT;
-        error->result = result;
-        vulkano_write_error_message(error, "timeout exceeded submitting single use command buffer");
-        return;
+    VkExtent2D extent = capabilities.currentExtent;
+    if (extent.width == 0xFFFFFFFF) {
+        uint32_t width, height;
+        vk->query_size(&width, &height);
+        extent.width = VULKANO_CLAMP(
+            capabilities.minImageExtent.width, capabilities.maxImageExtent.width, width
+        );
+        extent.height = VULKANO_CLAMP(
+            capabilities.minImageExtent.height, capabilities.maxImageExtent.height, height
+        );
     }
-
-    if (IS_VULKAN_MEMORY_ERROR(result)) {
-        vulkano_out_of_memory(error, result);
-        return;
-    }
-
-    vulkano_fatal_error(error, result);
+    return (
+        extent.height != vk->swapchain.extent.height ||
+        extent.width != vk->swapchain.extent.width
+    );
 }
 
 void
-vulkano_frame_acquire(struct vulkano* vk, struct vulkano_frame* frame, struct vulkano_error* error)
+vulkano_frame_acquire(
+    struct vulkano* vk, struct vulkano_frame* frame, VulkanoError* error
+)
 {
-    if (error->code) return;
+    assert(
+        vk->swapchain.image_count &&
+        "you probably need to call vulkano_configure_swapchain"
+    );
+    if (*error) return;
+
+    if (vulkano_resized(vk, error)) {
+        destroy_swapchain(vk);
+    }
+    if (vk->swapchain.handle == VK_NULL_HANDLE) {
+        create_swapchain(vk, error);
+        if (*error) return;
+    }
 
     frame->number = vk->frame_counter++;
     frame->index = frame->number % vk->swapchain.image_count;
     frame->state = vk->frame_state[frame->index];
 
-    VkResult result = vkWaitForFences(vk->device, 1, &frame->state.presentation_complete, VK_TRUE, VULKANO_TIMEOUT);
-    if (result == VK_TIMEOUT) {
-        error->code = VULKANO_ERROR_CODE_TIMEOUT;
-        error->result = result;
-        vulkano_write_error_message(error, "timeout waiting for frame complete fence");
-        return;
-    }
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VULKANO_CHECK(
+        vkWaitForFences(
+            vk->device, 1, &frame->state.presentation_complete, VK_TRUE, VULKANO_TIMEOUT
+        ),
+        error
+    );
+    VULKANO_CHECK(
+        vkResetFences(vk->device, 1, &frame->state.presentation_complete), error
+    );
+    VULKANO_CHECK(vkResetCommandBuffer(frame->state.render_command, 0), error);
+    if (*error) return;
 
-    result = vkResetFences(vk->device, 1, &frame->state.presentation_complete);
-    if (result != VK_SUCCESS) {
-        vulkano_out_of_memory(error, result);
-        return;
-    }
-    result = vkResetCommandBuffer(frame->state.render_command, 0);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-
-acquire_image:
-    result = vkAcquireNextImageKHR(
+acquire_image : {
+    VkResult result = vkAcquireNextImageKHR(
         vk->device,
         vk->swapchain.handle,
         VULKANO_TIMEOUT,
@@ -1532,39 +1577,35 @@ acquire_image:
         VK_NULL_HANDLE,
         &frame->image_index
     );
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
+        vulkano_resized(vk, error)) {
         destroy_swapchain(vk);
         create_swapchain(vk, error);
-        if (error->code) return;
+        if (*error) return;
         goto acquire_image;
-    }
-    if (result == VK_TIMEOUT) {
-        error->code = VULKANO_ERROR_CODE_TIMEOUT;
-        error->result = result;
-        vulkano_write_error_message(error, "timeout trying to acquire swapchain image");
-        return;
     }
     if (result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
         // FIXME: handle this case
-        vulkano_fatal_error(error, result);
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR("full screen exclusive mode lost not implemented\n");
         return;
     }
     if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
         return;
     }
 
     frame->framebuffer = vk->swapchain.framebuffers[frame->image_index];
-
-    struct VkCommandBufferBeginInfo command_begin_info = {
+    VkCommandBufferBeginInfo command_begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
     };
-    result = vkBeginCommandBuffer(frame->state.render_command, &command_begin_info);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VULKANO_CHECK(
+        vkBeginCommandBuffer(frame->state.render_command, &command_begin_info), error
+    );
+    if (*error) return;
+}
 
+    // TODO: add configurable depth clear value to frame
     VkClearValue clear_value[] = {
         {
             .color.float32 =
@@ -1578,12 +1619,11 @@ acquire_image:
         {
             .depthStencil =
                 {
-                    .depth = 0.0f,
-                    .stencil = 0,
+                    .depth = 1.0f,
                 },
         },
     };
-    struct VkRenderPassBeginInfo render_begin_info = {
+    VkRenderPassBeginInfo render_begin_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
         .renderPass = vk->swapchain.render_pass,
         .framebuffer = frame->framebuffer,
@@ -1591,46 +1631,59 @@ acquire_image:
         .clearValueCount = 2,
         .pClearValues = clear_value,
     };
-    vkCmdBeginRenderPass(frame->state.render_command, &render_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBeginRenderPass(
+        frame->state.render_command, &render_begin_info, VK_SUBPASS_CONTENTS_INLINE
+    );
 }
 
 void
 vulkano_frame_submit(
-    struct vulkano* vk, struct vulkano_frame* frame, struct VkSubmitInfo info, struct vulkano_error* error
+    struct vulkano*       vk,
+    struct vulkano_frame* frame,
+    VkSubmitInfo          info,
+    VulkanoError*         error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
     vkCmdEndRenderPass(frame->state.render_command);
 
-    VkResult result = vkEndCommandBuffer(frame->state.render_command);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VULKANO_CHECK(vkEndCommandBuffer(frame->state.render_command), error);
+    if (*error) return;
 
+    // add library wait semaphores to user provided ones
+    VkPipelineStageFlags  wait_mask[32];
+    VkSemaphore           wait_semaphores[32];
     static const uint32_t library_wait_count = 1;
-    uint32_t              total_wait_semaphores = library_wait_count + info.waitSemaphoreCount;
-    VkPipelineStageFlags  wait_mask[total_wait_semaphores];
+    uint32_t total_wait_semaphores = library_wait_count + info.waitSemaphoreCount;
+    assert(total_wait_semaphores <= 32);
+
     wait_mask[0] = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    VkSemaphore wait_semaphores[total_wait_semaphores];
     wait_semaphores[0] = frame->state.image_ready_for_use;
+
     for (uint32_t i = 0; i < total_wait_semaphores - library_wait_count; i++) {
         wait_mask[library_wait_count + i] = info.pWaitDstStageMask[i];
         wait_semaphores[library_wait_count + i] = info.pWaitSemaphores[i];
     }
 
+    // add library signal semaphores to user provided ones
+    VkSemaphore           signal_semaphores[32];
     static const uint32_t library_signal_count = 1;
-    uint32_t              total_signal_semaphores = library_signal_count + info.signalSemaphoreCount;
-    VkSemaphore           signal_semaphores[total_signal_semaphores];
+    uint32_t total_signal_semaphores = library_signal_count + info.signalSemaphoreCount;
+    assert(total_signal_semaphores <= 32);
+
     signal_semaphores[0] = frame->state.rendering_commands_complete;
+
     for (uint32_t i = 0; i < total_signal_semaphores - library_signal_count; i++) {
         signal_semaphores[library_signal_count + i] = info.pSignalSemaphores[i];
     }
 
-    assert(info.commandBufferCount == 0 && "submitting additional commands alongside render command not supported");
+    assert(
+        info.commandBufferCount == 0 &&
+        "submitting additional commands alongside render command not supported"
+    );
 
-    struct VkSubmitInfo submit_info = {
+    VkSubmitInfo submit_info = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .waitSemaphoreCount = total_wait_semaphores,
         .pWaitSemaphores = wait_semaphores,
@@ -1640,16 +1693,13 @@ vulkano_frame_submit(
         .signalSemaphoreCount = total_signal_semaphores,
         .pSignalSemaphores = signal_semaphores,
     };
-
-    result = vkQueueSubmit(vk->gpu.graphics_queue, 1, &submit_info, frame->state.presentation_complete);
-    if (IS_VULKAN_MEMORY_ERROR(result)) {
-        vulkano_out_of_memory(error, result);
-        return;
-    }
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    VULKANO_CHECK(
+        vkQueueSubmit(
+            vk->gpu.graphics_queue, 1, &submit_info, frame->state.presentation_complete
+        ),
+        error
+    );
+    if (*error) return;
 
     VkPresentInfoKHR present_info = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -1659,7 +1709,7 @@ vulkano_frame_submit(
         .pSwapchains = &vk->swapchain.handle,
         .pImageIndices = &frame->image_index,
     };
-    result = vkQueuePresentKHR(vk->gpu.graphics_queue, &present_info);
+    VkResult result = vkQueuePresentKHR(vk->gpu.graphics_queue, &present_info);
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         return;
     }
@@ -1669,11 +1719,11 @@ vulkano_frame_submit(
     }
     if (result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
         // FIXME: handle this case
-        vulkano_fatal_error(error, result);
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR("full screen exclusive mode lost not implemented\n");
         return;
     }
-
-    vulkano_fatal_error(error, result);
+    *error = VULKANO_ERROR_CODE_FATAL_ERROR;
 }
 
 static uint32_t
@@ -1681,77 +1731,73 @@ select_memory_type(
     struct vulkano_gpu    gpu,
     uint32_t              required_memory_type_bits,
     VkMemoryPropertyFlags required_memory_property_flags,
-    struct vulkano_error* error
+    VulkanoError*         error
 )
 {
-    if (error->code) return 0;
+    if (*error) return 0;
 
     for (uint32_t i = 0; i < gpu.memory_properties.memoryTypeCount; i++) {
         uint32_t memory_type_check = (1 << i) & required_memory_type_bits;
         uint32_t memory_properties_check =
             required_memory_property_flags ==
-            (gpu.memory_properties.memoryTypes[i].propertyFlags & required_memory_property_flags);
+            (gpu.memory_properties.memoryTypes[i].propertyFlags &
+             required_memory_property_flags);
 
         if (memory_type_check && memory_properties_check) {
             return i;
         }
     }
 
-    error->code = VULKANO_ERROR_CODE_MEMORY_REQUIREMENTS_UNFULFILLED;
-    error->result = VK_ERROR_UNKNOWN;
-    vulkano_write_error_message(error, "unable to find memory fitting the given requriements");
+    *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+    VULKANO_ERROR("unable to find memory fitting the given requriements");
     return 0;
 }
 
 struct vulkano_buffer
 vulkano_buffer_create(
-    struct vulkano*           vk,
-    struct VkBufferCreateInfo info,
-    VkMemoryPropertyFlags     memory_properties,
-    struct vulkano_error*     error
+    struct vulkano*       vk,
+    VkBufferCreateInfo    info,
+    VkMemoryPropertyFlags memory_properties,
+    VulkanoError*         error
 )
 {
     struct vulkano_buffer buffer = {0};
-
-    if (error->code) return buffer;
+    if (*error) return buffer;
 
     buffer.usage = info.usage;
     buffer.capacity = info.size;
     DEFAULT0(info.sharingMode, VK_SHARING_MODE_EXCLUSIVE);
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 
-    VkResult result = vkCreateBuffer(vk->device, &info, NULL, &buffer.handle);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return buffer;
-    }
+    VULKANO_CHECK(vkCreateBuffer(vk->device, &info, NULL, &buffer.handle), error);
+    if (*error) return buffer;
 
-    struct VkMemoryRequirements memory_requirements = {0};
+    VkMemoryRequirements memory_requirements = {0};
     vkGetBufferMemoryRequirements(vk->device, buffer.handle, &memory_requirements);
-
-    uint32_t memory_type_index =
-        select_memory_type(vk->gpu, memory_requirements.memoryTypeBits, memory_properties, error);
-    if (error->code) {
+    uint32_t memory_type_index = select_memory_type(
+        vk->gpu, memory_requirements.memoryTypeBits, memory_properties, error
+    );
+    if (*error) {
         vkDestroyBuffer(vk->device, buffer.handle, NULL);
         return buffer;
     }
-    buffer.memory_flags = vk->gpu.memory_properties.memoryTypes[memory_type_index].propertyFlags;
 
-    struct VkMemoryAllocateInfo allocate_info = {
+    buffer.memory_flags =
+        vk->gpu.memory_properties.memoryTypes[memory_type_index].propertyFlags;
+    VkMemoryAllocateInfo allocate_info = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = memory_requirements.size,
         .memoryTypeIndex = memory_type_index,
     };
-    result = vkAllocateMemory(vk->device, &allocate_info, NULL, &buffer.memory);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
+    VULKANO_CHECK(
+        vkAllocateMemory(vk->device, &allocate_info, NULL, &buffer.memory), error
+    );
+    if (*error) {
         vkDestroyBuffer(vk->device, buffer.handle, NULL);
         return buffer;
     }
-
-    result = vkBindBufferMemory(vk->device, buffer.handle, buffer.memory, 0);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
+    VULKANO_CHECK(vkBindBufferMemory(vk->device, buffer.handle, buffer.memory, 0), error);
+    if (*error) {
         vkDestroyBuffer(vk->device, buffer.handle, NULL);
         vkFreeMemory(vk->device, buffer.memory, NULL);
         return buffer;
@@ -1771,62 +1817,66 @@ vulkano_buffer_destroy(struct vulkano* vk, struct vulkano_buffer* buffer)
 
 static void
 vulkano_buffer_copy_to_host_coherent(
-    struct vulkano* vk, struct vulkano_buffer* buffer, struct vulkano_data data, struct vulkano_error* error
+    struct vulkano*        vk,
+    struct vulkano_buffer* buffer,
+    struct vulkano_data    data,
+    VulkanoError*          error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    void*    memory;
-    VkResult result = vkMapMemory(vk->device, buffer->memory, 0, VK_WHOLE_SIZE, 0, &memory);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
-    memcpy(memory, data.bytes, data.length);
+    void* memory = NULL;
+    VULKANO_CHECK(
+        vkMapMemory(vk->device, buffer->memory, 0, VK_WHOLE_SIZE, 0, &memory), error
+    );
+    if (*error) return;
+    memcpy(memory, data.data, data.size);
     vkUnmapMemory(vk->device, buffer->memory);
 }
 
 static void
 vulkano_buffer_copy_to_host_visible(
-    struct vulkano* vk, struct vulkano_buffer* buffer, struct vulkano_data data, struct vulkano_error* error
+    struct vulkano*        vk,
+    struct vulkano_buffer* buffer,
+    struct vulkano_data    data,
+    VulkanoError*          error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    void*    memory;
-    VkResult result = vkMapMemory(vk->device, buffer->memory, 0, VK_WHOLE_SIZE, 0, &memory);
-    if (result != VK_SUCCESS) {
-        vulkano_out_of_memory(error, result);
-        return;
-    }
-    memcpy(memory, data.bytes, data.length);
+    void* memory = NULL;
+    VULKANO_CHECK(
+        vkMapMemory(vk->device, buffer->memory, 0, VK_WHOLE_SIZE, 0, &memory), error
+    );
+    if (*error) return;
+    memcpy(memory, data.data, data.size);
 
-    struct VkMappedMemoryRange range = {
+    VkMappedMemoryRange range = {
         .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
         .memory = buffer->memory,
         .offset = 0,
         .size = VK_WHOLE_SIZE,
     };
-    result = vkFlushMappedMemoryRanges(vk->device, 1, &range);
+    VULKANO_CHECK(vkFlushMappedMemoryRanges(vk->device, 1, &range), error);
     vkUnmapMemory(vk->device, buffer->memory);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        return;
-    }
+    if (*error) return;
 }
 
 static void
 vulkano_buffer_copy_to_device_local(
-    struct vulkano* vk, struct vulkano_buffer* buffer, struct vulkano_data data, struct vulkano_error* error
+    struct vulkano*        vk,
+    struct vulkano_buffer* buffer,
+    struct vulkano_data    data,
+    VulkanoError*          error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
     if (!(buffer->usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
-        error->code = VULKANO_ERROR_CODE_VALIDATION;
-        vulkano_write_error_message(
-            error,
-            "trying to copy to a buffer without VK_BUFFER_USAGE_TRANSFER_DST_BIT in "
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR(
+            "trying to copy to a buffer without "
+            "VK_BUFFER_USAGE_TRANSFER_DST_BIT in "
             "usage"
         );
         return;
@@ -1835,19 +1885,24 @@ vulkano_buffer_copy_to_device_local(
 
     struct vulkano_buffer transfer_buffer = vulkano_buffer_create(
         vk,
-        (struct VkBufferCreateInfo){
-            .size = data.length,
+        (VkBufferCreateInfo){
+            .size = data.size,
             .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         },
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
         error
     );
     vulkano_buffer_copy_to(vk, &transfer_buffer, data, error);
-
     VkCommandBuffer cmd = vulkano_acquire_single_use_command_buffer(vk, error);
-    if (error->code) goto cleanup;
+    if (*error) goto cleanup;
 
-    vkCmdCopyBuffer(cmd, transfer_buffer.handle, buffer->handle, 1, (struct VkBufferCopy[]){{.size = data.length}});
+    vkCmdCopyBuffer(
+        cmd,
+        transfer_buffer.handle,
+        buffer->handle,
+        1,
+        (VkBufferCopy[]){{.size = data.size}}
+    );
     vulkano_submit_single_use_command_buffer(vk, cmd, error);
 
 cleanup:
@@ -1856,14 +1911,17 @@ cleanup:
 
 void
 vulkano_buffer_copy_to(
-    struct vulkano* vk, struct vulkano_buffer* buffer, struct vulkano_data data, struct vulkano_error* error
+    struct vulkano*        vk,
+    struct vulkano_buffer* buffer,
+    struct vulkano_data    data,
+    VulkanoError*          error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    if (buffer->capacity < data.length) {
-        error->code = VULKANO_ERROR_CODE_VALIDATION;
-        vulkano_write_error_message(error, "overflowing copy operation requested");
+    if (buffer->capacity < data.size) {
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR("overflowing copy operation requested");
         return;
     }
 
@@ -1877,11 +1935,14 @@ vulkano_buffer_copy_to(
 
 struct vulkano_image
 vulkano_image_create(
-    struct vulkano* vk, struct VkImageCreateInfo info, VkMemoryPropertyFlags memory_flags, struct vulkano_error* error
+    struct vulkano*       vk,
+    VkImageCreateInfo     info,
+    VkMemoryPropertyFlags memory_flags,
+    VulkanoError*         error
 )
 {
     struct vulkano_image image = {.layout = info.initialLayout};
-    if (error->code) return image;
+    if (*error) return image;
 
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     DEFAULT0(info.imageType, VK_IMAGE_TYPE_2D);
@@ -1891,16 +1952,14 @@ vulkano_image_create(
     DEFAULT0(info.format, vk->gpu.configured_surface_format.format);
     DEFAULT0(info.samples, VK_SAMPLE_COUNT_1_BIT);
 
-    VkResult result = vkCreateImage(vk->device, &info, NULL, &image.handle);
-    if (result != VK_SUCCESS) {
-        vulkano_out_of_memory(error, result);
-        return image;
-    }
+    VULKANO_CHECK(vkCreateImage(vk->device, &info, NULL, &image.handle), error);
+    if (*error) return image;
 
-    struct VkMemoryRequirements requirements;
+    VkMemoryRequirements requirements;
     vkGetImageMemoryRequirements(vk->device, image.handle, &requirements);
-    uint32_t memory_type = select_memory_type(vk->gpu, requirements.memoryTypeBits, memory_flags, error);
-    if (error->code) {
+    uint32_t memory_type =
+        select_memory_type(vk->gpu, requirements.memoryTypeBits, memory_flags, error);
+    if (*error) {
         vulkano_image_destroy(vk, &image);
         return image;
     }
@@ -1910,15 +1969,11 @@ vulkano_image_create(
         .allocationSize = requirements.size,
         .memoryTypeIndex = memory_type,
     };
-    result = vkAllocateMemory(vk->device, &allocation_info, NULL, &image.memory);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
-        vulkano_image_destroy(vk, &image);
-        return image;
-    }
-    result = vkBindImageMemory(vk->device, image.handle, image.memory, 0);
-    if (result != VK_SUCCESS) {
-        vulkano_fatal_error(error, result);
+    VULKANO_CHECK(
+        vkAllocateMemory(vk->device, &allocation_info, NULL, &image.memory), error
+    );
+    VULKANO_CHECK(vkBindImageMemory(vk->device, image.handle, image.memory, 0), error);
+    if (*error) {
         vulkano_image_destroy(vk, &image);
         return image;
     }
@@ -1937,12 +1992,15 @@ vulkano_image_destroy(struct vulkano* vk, struct vulkano_image* image)
 
 void
 vulkano_image_change_layout(
-    struct vulkano* vk, struct vulkano_image* image, VkImageLayout layout, struct vulkano_error* error
+    struct vulkano*       vk,
+    struct vulkano_image* image,
+    VkImageLayout         layout,
+    VulkanoError*         error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    struct VkImageMemoryBarrier barrier = {
+    VkImageMemoryBarrier barrier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .oldLayout = image->layout,
         .newLayout = layout,
@@ -1957,7 +2015,8 @@ vulkano_image_change_layout(
     VkPipelineStageFlags dest_stage_flags;
     VkPipelineStageFlags source_stage_flags;
 
-    if (image->layout == VK_IMAGE_LAYOUT_UNDEFINED && layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    if (image->layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+        layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
         barrier.srcAccessMask = 0;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         source_stage_flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -1970,32 +2029,34 @@ vulkano_image_change_layout(
         dest_stage_flags = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     }
     else {
-        error->code = VULKANO_ERROR_CODE_VALIDATION;
-        vulkano_write_error_message(error, "unimplemented layout transition");
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR("unimplemented layout transition");
         return;
     }
 
     image->layout = layout;
 
     VkCommandBuffer cmd = vulkano_acquire_single_use_command_buffer(vk, error);
-    if (error->code) return;
+    if (*error) return;
 
-    vkCmdPipelineBarrier(cmd, source_stage_flags, dest_stage_flags, 0, 0, NULL, 0, NULL, 1, &barrier);
-
+    vkCmdPipelineBarrier(
+        cmd, source_stage_flags, dest_stage_flags, 0, 0, NULL, 0, NULL, 1, &barrier
+    );
     vulkano_submit_single_use_command_buffer(vk, cmd, error);
-    if (error->code) return;
+    if (*error) return;
 }
 
 void
 vulkano_image_copy_to(
-    struct vulkano* vk, struct vulkano_image* image, struct vulkano_image_data data, struct vulkano_error* error
+    struct vulkano*           vk,
+    struct vulkano_image*     image,
+    struct vulkano_image_data data,
+    VulkanoError*             error
 )
 {
-    if (error->code) return;
+    if (*error) return;
 
-    // TODO: store some data on vulkano_image struct to fill out this struct more
-    // generally
-    struct VkBufferImageCopy copy_info = {
+    VkBufferImageCopy copy_info = {
         .imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
         .imageSubresource.layerCount = 1,
         .imageExtent = {data.width, data.height, 1},
@@ -2003,25 +2064,90 @@ vulkano_image_copy_to(
 
     struct vulkano_buffer transfer_buffer = vulkano_buffer_create(
         vk,
-        (struct VkBufferCreateInfo){
-            .size = data.length,
+        (VkBufferCreateInfo){
+            .size = data.size,
             .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         },
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
         error
     );
     vulkano_buffer_copy_to(
-        vk, &transfer_buffer, (struct vulkano_data){.length = data.length, .bytes = data.bytes}, error
+        vk,
+        &transfer_buffer,
+        (struct vulkano_data){.size = data.size, .data = data.pixels},
+        error
     );
 
     VkCommandBuffer cmd = vulkano_acquire_single_use_command_buffer(vk, error);
-    if (error->code) goto cleanup;
+    if (*error) goto cleanup;
 
-    vkCmdCopyBufferToImage(cmd, transfer_buffer.handle, image->handle, image->layout, 1, &copy_info);
+    vkCmdCopyBufferToImage(
+        cmd, transfer_buffer.handle, image->handle, image->layout, 1, &copy_info
+    );
     vulkano_submit_single_use_command_buffer(vk, cmd, error);
 
 cleanup:
     vulkano_buffer_destroy(vk, &transfer_buffer);
+}
+
+struct vulkano_sampler
+vulkano_sampler_create(
+    struct vulkano* vk, struct vulkano_image_data data, VulkanoError* error
+)
+{
+    struct vulkano_sampler sampler = {0};
+    if (*error) return sampler;
+
+    sampler.image = vulkano_image_create(
+        vk,
+        (VkImageCreateInfo){
+            .format = data.format,
+            .extent =
+                {
+                    .width = data.width,
+                    .height = data.height,
+                    .depth = 1,
+                },
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        },
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        error
+    );
+    vulkano_image_change_layout(
+        vk, &sampler.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, error
+    );
+    vulkano_image_copy_to(vk, &sampler.image, data, error);
+    vulkano_image_change_layout(
+        vk, &sampler.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, error
+    );
+    sampler.view = vulkano_create_image_view(
+        vk,
+        (VkImageViewCreateInfo){
+            .image = sampler.image.handle,
+            .format = data.format,
+        },
+        error
+    );
+    sampler.handle = vulkano_create_sampler(
+        vk,
+        (VkSamplerCreateInfo){
+            .anisotropyEnable = VK_TRUE,
+            .maxAnisotropy = vk->gpu.properties.limits.maxSamplerAnisotropy,
+        },
+        error
+    );
+    if (*error) vulkano_sampler_destroy(vk, &sampler);
+    return sampler;
+}
+
+void
+vulkano_sampler_destroy(struct vulkano* vk, struct vulkano_sampler* sampler)
+{
+    if (vk->device) vkDeviceWaitIdle(vk->device);
+    vulkano_image_destroy(vk, &sampler->image);
+    vkDestroyImageView(vk->device, sampler->view, NULL);
+    vkDestroySampler(vk->device, sampler->handle, NULL);
+    *sampler = (struct vulkano_sampler){0};
 }
 
 static uint64_t
@@ -2029,8 +2155,8 @@ score_gpu(VkPhysicalDevice gpu)
 {
     uint64_t score;
 
-    // score gpus in tiers where Discrete > Integrated > Virtual reguardless of other
-    // properties
+    // score gpus in tiers where Discrete > Integrated > Virtual reguardless of
+    // other properties
     {
         static const uint64_t DISCRETE = (uint64_t)1 << 63;
         static const uint64_t INTEGRATED = (uint64_t)1 << 62;
@@ -2110,7 +2236,8 @@ score_surface_format(VkSurfaceFormatKHR format)
     uint32_t STANDARD_COLOR_FORMAT_BIT = (uint32_t)1 << 29;
 
     uint32_t score = 0;
-    if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) score &= STANDARD_COLOR_SPACE_BIT;
+    if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        score &= STANDARD_COLOR_SPACE_BIT;
     if (format.format == VK_FORMAT_B8G8R8A8_SRGB) score &= STANDARD_COLOR_FORMAT_BIT;
 
     return score;
@@ -2124,6 +2251,94 @@ default_surface_format_compare(VkSurfaceFormatKHR* fmt1, VkSurfaceFormatKHR* fmt
     if (score1 > score2) return 1;
     if (score1 == score2) return 0;
     return -1;
+}
+
+static int
+compare_layer_properties_name(VkLayerProperties* prop1, VkLayerProperties* prop2)
+{
+    return strcmp(prop1->layerName, prop2->layerName);
+}
+
+static int
+compare_extension_names(
+    const VkExtensionProperties* ext1, const VkExtensionProperties* ext2
+)
+{
+    return strcmp(ext1->extensionName, ext2->extensionName);
+}
+
+// only for use during initialization
+static struct string_array
+combine_string_arrays_unique(struct string_array array1, struct string_array array2)
+{
+    uint32_t total_count = array1.count + array2.count;
+    if (total_count == 0) return (struct string_array){.count = 0, .data = NULL};
+
+    struct string_array combined = {
+        .data = init_malloc((array1.count + array2.count) * sizeof(const char*)),
+    };
+    if (array1.data) {
+        combined.count = array1.count;
+        memcpy(combined.data, array1.data, sizeof(array1.data[0]) * array1.count);
+        qsort(array1.data, array1.count, sizeof(const char*), (compare_function)strcmp);
+    }
+    if (array2.data)
+        for (uint32_t i = 0; i < array2.count; i++) {
+            if (!array1.data || !bsearch(
+                                    array2.data[i],
+                                    array1.data,
+                                    array1.count,
+                                    sizeof(array1.data[0]),
+                                    (compare_function)strcmp
+                                ))
+                memcpy(
+                    combined.data + combined.count++,
+                    array2.data + i,
+                    sizeof(array1.data[0])
+                );
+        }
+    return combined;
+}
+
+static const char*
+gpu_name(VkPhysicalDevice gpu)
+{
+    static char                buffer[256];
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(gpu, &properties);
+    snprintf(buffer, sizeof(buffer), "%s", properties.deviceName);
+    return buffer;
+}
+
+static void*
+init_malloc(size_t size)
+{
+    if (init_allocations.count == init_allocations.capacity) {
+        init_allocations.capacity = 1 + (init_allocations.capacity * 2);
+        init_allocations.allocations = realloc(
+            init_allocations.allocations,
+            (sizeof *init_allocations.allocations) * init_allocations.capacity
+        );
+        if (!init_allocations.allocations) goto memory_error;
+    }
+    void* allocation = malloc(size);
+    if (!allocation) goto memory_error;
+    init_allocations.allocations[init_allocations.count++] = allocation;
+    return allocation;
+
+memory_error:
+    VULKANO_ERROR("ran out of memory during initialization");
+    exit(EXIT_FAILURE);
+}
+
+static void
+free_init_allocations(void)
+{
+    for (size_t i = 0; i < init_allocations.count; i++) {
+        free(init_allocations.allocations[i]);
+    }
+    free(init_allocations.allocations);
+    memset(&init_allocations, 0, sizeof(init_allocations));
 }
 
 const char*
@@ -2836,40 +3051,20 @@ query_size(uint32_t* width, uint32_t* height)
     *height = (uint32_t)h;
 }
 
-struct vulkano_sdl
-vulkano_sdl_create(struct vulkano_config vkcfg, struct sdl_config sdlcfg, struct vulkano_error* error)
+struct vulkano
+vulkano_from_sdl(
+    struct vulkano_config vkcfg, struct SDL_Window* window, VulkanoError* error
+)
 {
-    struct vulkano_sdl vksdl = {0};
-    if (error->code) return vksdl;
-
-    DEFAULT0(sdlcfg.title, "vulkano sdl window");
-    DEFAULT0(sdlcfg.width, 720);
-    DEFAULT0(sdlcfg.height, 480);
-
+    vulkano_sdl_window = window;
     vkcfg.surface_creation = create_surface;
     vkcfg.query_window_size = query_size;
 
-    // initialize sdl
-    if (SDL_Init(sdlcfg.init_flags | SDL_INIT_VIDEO)) {
-        error->code = VULKANO_ERROR_CODE_SURFACE_CREATION_FAILED;
-        error->result = VK_ERROR_UNKNOWN;
-        vulkano_write_error_message(error, SDL_GetError());
-        return vksdl;
-    }
-    vulkano_sdl_window = SDL_CreateWindow(
-        sdlcfg.title, sdlcfg.left, sdlcfg.top, sdlcfg.width, sdlcfg.height, sdlcfg.window_flags | SDL_WINDOW_VULKAN
-    );
-    if (!vulkano_sdl_window) {
-        error->code = VULKANO_ERROR_CODE_SURFACE_CREATION_FAILED;
-        error->result = VK_ERROR_UNKNOWN;
-        vulkano_write_error_message(error, SDL_GetError());
-        SDL_Quit();
-        return vksdl;
-    }
-    vksdl.sdl = vulkano_sdl_window;
+    struct vulkano vk = {0};
+    if (*error) return vk;
 
-    // enumerate sdl required instance extensions and combine them with user required
-    // instance extensions
+    // enumerate sdl required instance extensions and combine them with user
+    // required instance extensions
     struct string_array user_instance_extensions = {
         .count = vkcfg.instance_extensions_count,
         .data = vkcfg.instance_extensions,
@@ -2877,34 +3072,73 @@ vulkano_sdl_create(struct vulkano_config vkcfg, struct sdl_config sdlcfg, struct
     struct string_array sdl_required_extensions = {0};
     struct string_array combined_instance_extensions = {0};
 
-    if (!SDL_Vulkan_GetInstanceExtensions(vksdl.sdl, &sdl_required_extensions.count, NULL)) {
-        vulkano_fatal_error(error, VK_ERROR_UNKNOWN);
-        vulkano_write_error_message(error, SDL_GetError());
-        SDL_DestroyWindow(vksdl.sdl);
-        SDL_Quit();
-        return vksdl;
+    if (!SDL_Vulkan_GetInstanceExtensions(window, &sdl_required_extensions.count, NULL)) {
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR(SDL_GetError());
+        return vk;
     }
-    const char* extensions[sdl_required_extensions.count];
+    const char** extensions;
+    VULKANO_INIT_MALLOC_ARRAY(extensions, sdl_required_extensions.count);
     sdl_required_extensions.data = extensions;
-    if (!SDL_Vulkan_GetInstanceExtensions(vksdl.sdl, &sdl_required_extensions.count, sdl_required_extensions.data)) {
-        vulkano_fatal_error(error, VK_ERROR_UNKNOWN);
-        vulkano_write_error_message(error, SDL_GetError());
+    if (!SDL_Vulkan_GetInstanceExtensions(
+            window, &sdl_required_extensions.count, sdl_required_extensions.data
+        )) {
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR(SDL_GetError());
         goto cleanup;
     }
 
     combined_instance_extensions =
-        combine_string_arrays_unique(user_instance_extensions, sdl_required_extensions, error);
-    if (error->code) goto cleanup;
+        combine_string_arrays_unique(user_instance_extensions, sdl_required_extensions);
+    if (*error) goto cleanup;
     vkcfg.instance_extensions = combined_instance_extensions.data;
     vkcfg.instance_extensions_count = combined_instance_extensions.count;
 
     // initialize vulkano
-    vksdl.vk = vulkano_create(vkcfg, error);
-    if (error->code) goto cleanup;
+    vk = vulkano_create(vkcfg, error);
+    if (*error) goto cleanup;
 
 cleanup:
-    free(combined_instance_extensions.data);
-    if (error->code) vulkano_sdl_destroy(&vksdl);
+    free_init_allocations();
+    if (*error) vulkano_destroy(&vk);
+    return vk;
+}
+
+struct vulkano_sdl
+vulkano_sdl_create(
+    struct vulkano_config vkcfg, struct sdl_config sdlcfg, VulkanoError* error
+)
+{
+    struct vulkano_sdl vksdl = {0};
+    if (*error) return vksdl;
+
+    DEFAULT0(sdlcfg.title, "vulkano sdl window");
+    DEFAULT0(sdlcfg.width, 720);
+    DEFAULT0(sdlcfg.height, 480);
+
+    // initialize sdl
+    if (SDL_Init(sdlcfg.init_flags | SDL_INIT_VIDEO)) {
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR(SDL_GetError());
+        return vksdl;
+    }
+    vulkano_sdl_window = SDL_CreateWindow(
+        sdlcfg.title,
+        sdlcfg.left,
+        sdlcfg.top,
+        sdlcfg.width,
+        sdlcfg.height,
+        sdlcfg.window_flags | SDL_WINDOW_VULKAN
+    );
+    if (!vulkano_sdl_window) {
+        *error = VULKANO_ERROR_CODE_FATAL_ERROR;
+        VULKANO_ERROR(SDL_GetError());
+        SDL_Quit();
+        return vksdl;
+    }
+
+    vksdl.sdl = vulkano_sdl_window;
+    vksdl.vk = vulkano_from_sdl(vkcfg, vulkano_sdl_window, error);
     return vksdl;
 }
 

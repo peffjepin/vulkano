@@ -1,5 +1,7 @@
 #include <errno.h>
 
+#define _CRT_SECURE_NO_WARNINGS
+#define SDL_MAIN_HANDLED
 #define VULKANO_IMPLEMENTATION
 #define VULKANO_ENABLE_DEFAULT_VALIDATION_LAYERS
 #define VULKANO_ENABLE_DEFAULT_GRAPHICS_EXTENSIONS
@@ -31,16 +33,25 @@ struct vertex_instanced {
 struct vulkano_data read_file_content(const char* filepath);
 
 int
-main(void)
+main(int argc, char* argv[])
 {
-    struct vulkano_error error = {0};
-    struct vulkano_sdl   vksdl = vulkano_sdl_create(
-        (struct vulkano_config){0}, (struct sdl_config){.window_flags = SDL_WINDOW_RESIZABLE}, &error
+    (void)argc;
+    (void)argv;
+
+    VulkanoError       error = 0;
+    struct vulkano_sdl vksdl = vulkano_sdl_create(
+        (struct vulkano_config){0},
+        (struct sdl_config){
+            .left = 100,
+            .top = 100,
+            .window_flags = SDL_WINDOW_RESIZABLE,
+        },
+        &error
     );
 
-    if (error.code) {
-        fprintf(stderr, "ERROR: vulkan failed to initialize (%s)\n", error.message);
-        return error.code;
+    if (error) {
+        fprintf(stderr, "ERROR: vulkano initialization failed\n");
+        return error;
     }
 
     VkRenderPass render_pass = vulkano_create_render_pass(
@@ -86,7 +97,8 @@ main(void)
                             (struct VkAttachmentReference[]){
                                 {
                                     .attachment = 1,
-                                    .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                    .layout =
+                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                                 },
                             },
                     },
@@ -97,16 +109,19 @@ main(void)
 
     vulkano_configure_swapchain(&vksdl.vk, render_pass, 3, &error);
 
-    struct vulkano_data vertex_shader_data = read_file_content("shader.vert.spv");
-    struct vulkano_data fragment_shader_data = read_file_content("shader.frag.spv");
+    struct vulkano_data vertex_shader_data = read_file_content("build/shader.vert.spv");
+    struct vulkano_data fragment_shader_data = read_file_content("build/shader.frag.spv");
 
-    VkShaderModule   vertex_shader_module = vulkano_create_shader_module(&vksdl.vk, vertex_shader_data, &error);
-    VkShaderModule   fragment_shader_module = vulkano_create_shader_module(&vksdl.vk, fragment_shader_data, &error);
-    VkPipelineLayout pipeline_layout =
-        vulkano_create_pipeline_layout(&vksdl.vk, (struct VkPipelineLayoutCreateInfo){0}, &error);
+    VkShaderModule vertex_shader_module =
+        vulkano_create_shader_module(&vksdl.vk, vertex_shader_data, &error);
+    VkShaderModule fragment_shader_module =
+        vulkano_create_shader_module(&vksdl.vk, fragment_shader_data, &error);
+    VkPipelineLayout pipeline_layout = vulkano_create_pipeline_layout(
+        &vksdl.vk, (struct VkPipelineLayoutCreateInfo){0}, &error
+    );
     VkPipeline pipeline = vulkano_create_graphics_pipeline(
         &vksdl.vk,
-        (struct graphics_pipeline_create_info){
+        (struct vulkano_pipeline_config){
             .stage_count = 2,
             .stages =
                 {
@@ -198,13 +213,15 @@ main(void)
                             {
                                 .blendEnable = VK_TRUE,
                                 .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-                                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                                .dstColorBlendFactor =
+                                    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                                 .colorBlendOp = VK_BLEND_OP_ADD,
                                 .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
                                 .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
                                 .alphaBlendOp = VK_BLEND_OP_ADD,
-                                .colorWriteMask = VK_COLOR_COMPONENT_A_BIT | VK_COLOR_COMPONENT_B_BIT |
-                                                  VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_R_BIT,
+                                .colorWriteMask =
+                                    VK_COLOR_COMPONENT_A_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                    VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_R_BIT,
                             },
                         },
                 },
@@ -224,16 +241,16 @@ main(void)
     );
 
     struct vertex vertices[] = {
-        {.position = {-1, -1}, .color = {0.0, 0.8, 0.8}},
-        {.position = {1, -1}, .color = {0.8, 0.0, 0.8}},
-        {.position = {1, 1}, .color = {0.8, 0.8, 0.0}},
-        {.position = {-1, 1}, .color = {0.2, 0.2, 0.6}},
+        {.position = {-1.0f, -1.0f}, .color = {0.0f, 0.8f, 0.8f}},
+        {.position = {1.0f, -1.0f}, .color = {0.8f, 0.0f, 0.8f}},
+        {.position = {1.0f, 1.0f}, .color = {0.8f, 0.8f, 0.0f}},
+        {.position = {-1.0f, 1.0f}, .color = {0.2f, 0.2f, 0.6f}},
     };
     struct vertex_instanced instanced_attributes[] = {
-        {.scale = 0.05, .offset = {-0.5, -0.5}},
-        {.scale = 0.2, .offset = {0.5, 0.5}},
-        {.scale = 0.33, .offset = {0.5, -0.5}},
-        {.scale = 0.1, .offset = {-0.5, 0.5}},
+        {.scale = 0.05f, .offset = {-0.5f, -0.5f}},
+        {.scale = 0.2f, .offset = {0.5f, 0.5f}},
+        {.scale = 0.33f, .offset = {0.5f, -0.5f}},
+        {.scale = 0.1f, .offset = {-0.5f, 0.5f}},
     };
     uint16_t indices[] = {0, 1, 3, 3, 1, 2};
 
@@ -250,8 +267,8 @@ main(void)
         &vksdl.vk,
         &vertex_buffer,
         (struct vulkano_data){
-            .length = sizeof(vertices),
-            .bytes = (uint8_t*)vertices,
+            .size = sizeof(vertices),
+            .data = (uint8_t*)vertices,
         },
         &error
     );
@@ -269,8 +286,8 @@ main(void)
         &vksdl.vk,
         &instance_attibutes_buffer,
         (struct vulkano_data){
-            .length = sizeof(instanced_attributes),
-            .bytes = (uint8_t*)instanced_attributes,
+            .size = sizeof(instanced_attributes),
+            .data = (uint8_t*)instanced_attributes,
         },
         &error
     );
@@ -288,20 +305,40 @@ main(void)
         &vksdl.vk,
         &index_buffer,
         (struct vulkano_data){
-            .length = sizeof(indices),
-            .bytes = (uint8_t*)indices,
+            .size = sizeof(indices),
+            .data = (uint8_t*)indices,
         },
         &error
     );
 
-    if (error.code) goto cleanup;
+    if (error) goto cleanup;
 
-    for (uint32_t i = 0; i < 1000; i++) {
-        struct vulkano_frame frame = {.clear = {0.012, 0.01, 0.01, 0.0}};
+    while (1) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+                case SDL_QUIT:
+                    goto cleanup;
+                case SDL_KEYDOWN:
+                    if (event.key.keysym.sym == SDLK_q ||
+                        event.key.keysym.sym == SDLK_ESCAPE)
+                        goto cleanup;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        struct vulkano_frame frame = {.clear = {0.012f, 0.01f, 0.01f, 1.0f}};
         vulkano_frame_acquire(&vksdl.vk, &frame, &error);
-        if (error.code) goto cleanup;
+        if (error == VULKANO_ERROR_CODE_MINIMIZED) {
+            continue;
+        }
+        if (error) goto cleanup;
 
-        vkCmdBindPipeline(frame.state.render_command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindPipeline(
+            frame.state.render_command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline
+        );
 
         VkViewport viewport = VULKANO_VIEWPORT(&vksdl.vk);
         vkCmdSetViewport(frame.state.render_command, 0, 1, &viewport);
@@ -316,7 +353,9 @@ main(void)
             (VkBuffer[]){vertex_buffer.handle, instance_attibutes_buffer.handle},
             (VkDeviceSize[]){0, 0}
         );
-        vkCmdBindIndexBuffer(frame.state.render_command, index_buffer.handle, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdBindIndexBuffer(
+            frame.state.render_command, index_buffer.handle, 0, VK_INDEX_TYPE_UINT16
+        );
 
         vkCmdDrawIndexed(
             frame.state.render_command,
@@ -328,7 +367,7 @@ main(void)
         );
 
         vulkano_frame_submit(&vksdl.vk, &frame, (struct VkSubmitInfo){0}, &error);
-        if (error.code) goto cleanup;
+        if (error) goto cleanup;
     }
 
 cleanup:
@@ -339,8 +378,8 @@ cleanup:
     vkDestroyShaderModule(vksdl.vk.device, fragment_shader_module, NULL);
     vkDestroyPipelineLayout(vksdl.vk.device, pipeline_layout, NULL);
     vkDestroyPipeline(vksdl.vk.device, pipeline, NULL);
-    free(vertex_shader_data.bytes);
-    free(fragment_shader_data.bytes);
+    free(vertex_shader_data.data);
+    free(fragment_shader_data.data);
 
     vulkano_buffer_destroy(&vksdl.vk, &vertex_buffer);
     vulkano_buffer_destroy(&vksdl.vk, &instance_attibutes_buffer);
@@ -348,9 +387,7 @@ cleanup:
 
     vulkano_sdl_destroy(&vksdl);
 
-    if (error.code) fprintf(stderr, "ERROR: %s\n", error.message);
-
-    return error.code;
+    return error;
 }
 
 struct vulkano_data
@@ -358,38 +395,61 @@ read_file_content(const char* filepath)
 {
     struct vulkano_data data = {0};
 
-    FILE* fp = fopen(filepath, "r");
+    FILE* fp = fopen(filepath, "rb");
     int   end;
 
     if (!fp) {
-        fprintf(stderr, "ERROR: failed to open file `%s` (%s)\n", filepath, strerror(errno));
+        fprintf(
+            stderr, "ERROR: failed to open file `%s` (%s)\n", filepath, strerror(errno)
+        );
         exit(1);
     }
     if (fseek(fp, 0, SEEK_END)) {
-        fprintf(stderr, "ERROR: failed to file operation `%s` (%s)\n", filepath, strerror(errno));
+        fprintf(
+            stderr,
+            "ERROR: failed to file operation `%s` (%s)\n",
+            filepath,
+            strerror(errno)
+        );
         fclose(fp);
         exit(1);
     }
     if ((end = ftell(fp)) < 0) {
-        fprintf(stderr, "ERROR: failed to file operation `%s` (%s)\n", filepath, strerror(errno));
+        fprintf(
+            stderr,
+            "ERROR: failed to file operation `%s` (%s)\n",
+            filepath,
+            strerror(errno)
+        );
         fclose(fp);
         exit(1);
     }
 
-    data.length = end;
+    data.size = end;
     if (fseek(fp, 0, SEEK_SET)) {
-        fprintf(stderr, "ERROR: failed to file operation `%s` (%s)\n", filepath, strerror(errno));
+        fprintf(
+            stderr,
+            "ERROR: failed to file operation `%s` (%s)\n",
+            filepath,
+            strerror(errno)
+        );
         fclose(fp);
         exit(1);
     }
 
-    if (!(data.bytes = (uint8_t*)malloc(data.length))) {
+    data.data = (uint8_t*)malloc(data.size);
+    if (data.data == NULL) {
         fprintf(stderr, "ERROR: out of memory\n");
         fclose(fp);
         exit(1);
     }
-    if (fread(data.bytes, 1, data.length, fp) < data.length) {
-        fprintf(stderr, "ERROR: failed to read file contents `%s` (%s)\n", filepath, strerror(errno));
+    if (fread(data.data, 1, data.size, fp) < data.size) {
+        fprintf(
+            stderr,
+            "ERROR: failed to read file contents `%s` (%s)\n",
+            filepath,
+            strerror(errno)
+        );
         fclose(fp);
         exit(1);
     };
