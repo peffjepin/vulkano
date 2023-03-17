@@ -3,15 +3,22 @@ GLSLC ?= glslc
 FLAGS = -Wall -Wextra -Wpedantic -std=c11 -g
 LINK = -lvulkan -lSDL2 -lm
 
-.PHONY: clean
+.PHONY: clean all
 
-shader.%.spv: example/shader.%
+build/shader.%.spv: example/shader.%
+	@mkdir -p build
 	$(GLSLC) $^ -o $@
 
-demo: example/main.c shader.vert.spv shader.frag.spv
+bin/hello_quads: build/main.o build/shader.vert.spv build/shader.frag.spv
+	@mkdir -p bin
 	$(CC) $< $(LINK) $(FLAGS) -o $@
 
+build/main.o: example/main.c
+	@mkdir -p build
+	$(CC) -c $(FLAGS) $< -o $@
+
+all: bin/hello_quads
+
 clean:
-	-rm shader.vert.spv
-	-rm shader.frag.spv
-	-rm demo
+	-rm -rf bin
+	-rm -rf build
