@@ -262,6 +262,36 @@ void vulkano_allocate_descriptor_sets(struct vulkano*, VkDescriptorSetAllocateIn
 #define VULKANO_SCISSOR(vulkano)                                                         \
     (VkRect2D) { .extent = (vulkano)->swapchain.extent }
 
+const char* vkresult_to_string(VkResult);
+
+void vulkano_log(const char* label, const char* filepath, int line, const char* message);
+void vulkano_logf(
+    const char* label, const char* filepath, int line, const char* fmt, ...
+);
+
+#define VULKANO_INFO(message) vulkano_log("[INFO]", NULL, __LINE__, message);
+#define VULKANO_INFOF(fmt, ...) vulkano_logf("[INFO]", NULL, __LINE__, fmt, __VA_ARGS__);
+#define VULKANO_ERROR(message) vulkano_log("[ERROR]", __FILE__, __LINE__, message);
+#define VULKANO_ERRORF(fmt, ...)                                                         \
+    vulkano_logf("[ERROR]", __FILE__, __LINE__, fmt, __VA_ARGS__);
+
+#define VULKANO_CHECK(expression, error)                                                 \
+    do {                                                                                 \
+        if (*error) break;                                                               \
+        VkResult check_result = expression;                                              \
+        if (check_result == VK_ERROR_OUT_OF_HOST_MEMORY ||                               \
+            check_result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {                             \
+            VULKANO_ERRORF("out of memory (%s)\n", vkresult_to_string(check_result));    \
+            *error = VULKANO_ERROR_CODE_OUT_OF_MEMORY;                                   \
+        }                                                                                \
+        else if (check_result != VK_SUCCESS) {                                           \
+            VULKANO_ERRORF(                                                              \
+                "fatal error encountered (%s)\n", vkresult_to_string(check_result)       \
+            );                                                                           \
+            *error = VULKANO_ERROR_CODE_FATAL_ERROR;                                     \
+        }                                                                                \
+    } while (0)
+
 //
 // **************************************************************************************
 //
@@ -272,30 +302,32 @@ void vulkano_allocate_descriptor_sets(struct vulkano*, VkDescriptorSetAllocateIn
 
 #ifdef VULKANO_IMPLEMENTATION
 
-static void
-vulkano_log(const char* label, int line, const char* message)
+
+void
+vulkano_log(const char* label, const char* filepath, int line, const char* message)
 {
 #ifndef VULKANO_DISABLE_LOG
-    fprintf(VULKANO_LOG_FILE, "%s (%i): %s", label, line, message);
+    if (filepath)
+        fprintf(VULKANO_LOG_FILE, "%s (%s:%i): %s", label, filepath, line, message);
+    else
+        fprintf(VULKANO_LOG_FILE, "%s: %s", label, message);
 #endif
 }
 
-static void
-vulkano_logf(const char* label, int line, const char* fmt, ...)
+void
+vulkano_logf(const char* label, const char* filepath, int line, const char* fmt, ...)
 {
 #ifndef VULKANO_DISABLE_LOG
     va_list args;
     va_start(args, fmt);
-    fprintf(VULKANO_LOG_FILE, "%s (%i): ", label, line);
+    if (filepath)
+        fprintf(VULKANO_LOG_FILE, "%s (%s:%i): ", label, filepath, line);
+    else
+        fprintf(VULKANO_LOG_FILE, "%s: ", label);
     vfprintf(VULKANO_LOG_FILE, fmt, args);
     va_end(args);
 #endif
 }
-
-#define VULKANO_INFO(message) vulkano_log("[INFO]", __LINE__, message);
-#define VULKANO_INFOF(fmt, ...) vulkano_logf("[INFO]", __LINE__, fmt, __VA_ARGS__);
-#define VULKANO_ERROR(message) vulkano_log("[ERROR]", __LINE__, message);
-#define VULKANO_ERRORF(fmt, ...) vulkano_logf("[ERROR]", __LINE__, fmt, __VA_ARGS__);
 
 #define VULKANO_CLAMP(min, max, value)                                                   \
     ((value < min) ? min : ((value > max) ? max : value))
@@ -327,7 +359,6 @@ static struct string_array combine_string_arrays_unique(
     struct string_array array1, struct string_array array2
 );
 
-static const char* vkresult_to_string(VkResult);
 static const char* present_mode_to_string(VkPresentModeKHR mode);
 static const char* color_format_to_string(VkFormat fmt);
 static const char* color_space_to_string(VkColorSpaceKHR space);
@@ -341,23 +372,6 @@ static int compare_extension_names(
 static int compare_layer_properties_name(
     VkLayerProperties* prop1, VkLayerProperties* prop2
 );
-
-#define VULKANO_CHECK(expression, error)                                                 \
-    do {                                                                                 \
-        if (*error) break;                                                               \
-        VkResult check_result = expression;                                              \
-        if (check_result == VK_ERROR_OUT_OF_HOST_MEMORY ||                               \
-            check_result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {                             \
-            VULKANO_ERRORF("out of memory (%s)\n", vkresult_to_string(check_result));    \
-            *error = VULKANO_ERROR_CODE_OUT_OF_MEMORY;                                   \
-        }                                                                                \
-        else if (check_result != VK_SUCCESS) {                                           \
-            VULKANO_ERRORF(                                                              \
-                "fatal error encountered (%s)\n", vkresult_to_string(check_result)       \
-            );                                                                           \
-            *error = VULKANO_ERROR_CODE_FATAL_ERROR;                                     \
-        }                                                                                \
-    } while (0)
 
 #define DEFAULT0(value, default_value) (value) = ((value)) ? (value) : (default_value)
 
@@ -998,8 +1012,10 @@ create_per_frame_state(struct vulkano* vk, VulkanoError* error)
     }
 }
 
+// destroy all of the swapchain state except for the handle (so the handle can be passed
+// in when recreating the swapchain on resize events
 static void
-destroy_swapchain(struct vulkano* vk)
+partial_destroy_swapchain(struct vulkano* vk)
 {
     if (!vk->device) return;
     vkDeviceWaitIdle(vk->device);
@@ -1021,6 +1037,12 @@ destroy_swapchain(struct vulkano* vk)
     vk->swapchain.depth_image_views = NULL;
     vk->swapchain.depth_images = NULL;
     vk->swapchain.framebuffers = NULL;
+}
+
+static void
+destroy_swapchain(struct vulkano* vk)
+{
+    partial_destroy_swapchain(vk);
     vkDestroySwapchainKHR(vk->device, vk->swapchain.handle, NULL);
     vk->swapchain.handle = VK_NULL_HANDLE;
 }
@@ -1261,7 +1283,7 @@ static void
 create_swapchain(struct vulkano* vk, VulkanoError* error)
 {
     if (*error) return;
-    destroy_swapchain(vk);
+    partial_destroy_swapchain(vk);
 
     VkSurfaceCapabilitiesKHR capabilities = {0};
     VULKANO_CHECK(
@@ -1309,11 +1331,14 @@ create_swapchain(struct vulkano* vk, VulkanoError* error)
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         .presentMode = vk->gpu.configured_present_mode,
         .clipped = VK_TRUE,
+        .oldSwapchain = vk->swapchain.handle,
     };
+    VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
     VULKANO_CHECK(
-        vkCreateSwapchainKHR(vk->device, &swapchain_info, NULL, &vk->swapchain.handle),
-        error
+        vkCreateSwapchainKHR(vk->device, &swapchain_info, NULL, &new_swapchain), error
     );
+    vkDestroySwapchainKHR(vk->device, vk->swapchain.handle, NULL);
+    vk->swapchain.handle = new_swapchain;
     if (*error) return;
 
     VkImage* images;
@@ -1545,7 +1570,8 @@ vulkano_frame_acquire(
     if (*error) return;
 
     if (vulkano_resized(vk, error)) {
-        destroy_swapchain(vk);
+        create_swapchain(vk, error);
+        if (*error) return;
     }
     if (vk->swapchain.handle == VK_NULL_HANDLE) {
         create_swapchain(vk, error);
@@ -1577,9 +1603,7 @@ acquire_image : {
         VK_NULL_HANDLE,
         &frame->image_index
     );
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
-        vulkano_resized(vk, error)) {
-        destroy_swapchain(vk);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         create_swapchain(vk, error);
         if (*error) return;
         goto acquire_image;
